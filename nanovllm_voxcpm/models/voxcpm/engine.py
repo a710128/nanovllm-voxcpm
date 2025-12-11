@@ -3,11 +3,17 @@ from nanovllm_voxcpm.models.voxcpm.runner import VoxCPMRunner, RunnerTask, VoxCP
 from nanovllm_voxcpm.config import Config
 from nanovllm_voxcpm.models.voxcpm.config import VoxCPMConfig
 from nanovllm_voxcpm.engine.sequence import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 from transformers import LlamaTokenizerFast
 from nanovllm_voxcpm.models.voxcpm.utils import mask_multichar_chinese_tokens
 import torch
+
+# 流式累积解码常量（参考 VoxCPMANE）
+STREAMING_ACCUMULATE_COUNT = 12  # 累积 12 个 patches 后解码
+STREAMING_CONTEXT_COUNT = 2      # 保留 2 个 patches 作为上下文
+SAMPLES_PER_FRAME = 640          # 每帧 640 样本
+PATCH_SIZE = 2                   # 每个 patch 2 帧
 
 
 @dataclass
@@ -17,7 +23,7 @@ class VoxCPMSeqPayload:
 
     text_tokens : list[int]
     feat_masks : list[bool]
-    
+
     generated_waveforms : list[np.ndarray]
 
     temperature : float
@@ -25,7 +31,12 @@ class VoxCPMSeqPayload:
 
     decode_pad : np.ndarray | None = None
     max_generate_length : int | None = None
-    
+
+    # 累积解码相关
+    pending_latents: list[np.ndarray] = field(default_factory=list)
+    is_first_chunk: bool = True
+    generated_patch_count: int = 0
+
 
 class VoxCPMEngine(LLMEngineBase):
     def __init__(self, config: Config[VoxCPMConfig]):
@@ -40,7 +51,7 @@ class VoxCPMEngine(LLMEngineBase):
 
 
         super().__init__(VoxCPMRunner, config, config.tensor_parallel_size)
-    
+
     def preprocess_seq(self, seq: Sequence[VoxCPMSeqPayload], is_prefill: bool) -> RunnerTask[VoxCPMPayload]:
         if is_prefill:
             if len(seq.custom_payload.feats) > 1:
@@ -81,7 +92,7 @@ class VoxCPMEngine(LLMEngineBase):
     def postprocess_seq(self, seq: Sequence[VoxCPMSeqPayload], outputs: dict, is_prefill: bool):
         stop_flag = outputs["stop_flag"]
         latents = outputs["latents"]
-        waveforms = outputs["waveforms"]
+        # waveforms 不再使用，改用累积解码
 
         seq.append_token(latents.tobytes())
 
@@ -89,17 +100,70 @@ class VoxCPMEngine(LLMEngineBase):
         seq.custom_payload.text_tokens.append(0)
         seq.custom_payload.feat_masks.append(True)
 
-        seq.custom_payload.generated_waveforms.append(waveforms)
+        # 累积 latents
+        seq.custom_payload.pending_latents.append(latents.copy())
+        seq.custom_payload.generated_patch_count += 1
 
-        latents = latents.reshape(-1, self.feat_dim)
+        # 更新 decode_pad（用于 LLM 推理的上下文）
+        latents_reshaped = latents.reshape(-1, self.feat_dim)
         if seq.custom_payload.decode_pad is not None:
-            seq.custom_payload.decode_pad = np.concatenate([seq.custom_payload.decode_pad, latents], axis=0)[-self.n_decode_pad_frames:]
+            seq.custom_payload.decode_pad = np.concatenate(
+                [seq.custom_payload.decode_pad, latents_reshaped], axis=0
+            )[-self.n_decode_pad_frames:]
         else:
-            seq.custom_payload.decode_pad = latents[-self.n_decode_pad_frames:]
+            seq.custom_payload.decode_pad = latents_reshaped[-self.n_decode_pad_frames:]
 
+        # 检查是否需要累积解码
+        pending_count = len(seq.custom_payload.pending_latents)
+        should_decode = pending_count >= STREAMING_ACCUMULATE_COUNT or stop_flag == 1
+
+        if should_decode and pending_count > 0:
+            # 累积解码
+            all_latents = np.stack(seq.custom_payload.pending_latents, axis=0)  # (N, P, D)
+            all_latents = all_latents.reshape(-1, self.feat_dim)  # (N*P, D)
+
+            # 调用 VAE 解码
+            decoded_waveform = self.model_runner.decode_latents(all_latents)
+
+            # 跳过重叠部分（非首次 chunk 跳过 2 patches = 4 帧 = 2560 样本）
+            if not seq.custom_payload.is_first_chunk:
+                skip_samples = STREAMING_CONTEXT_COUNT * PATCH_SIZE * SAMPLES_PER_FRAME
+                decoded_waveform = decoded_waveform[skip_samples:]
+            seq.custom_payload.is_first_chunk = False
+
+            # 如果停止，去掉最后 1280 样本（避免尾部杂音）
+            if stop_flag == 1:
+                decoded_waveform = decoded_waveform[:-PATCH_SIZE * SAMPLES_PER_FRAME]
+
+            # 只有有效数据时才添加
+            if len(decoded_waveform) > 0:
+                seq.custom_payload.generated_waveforms.append(decoded_waveform)
+
+            # 保留最后 2 个 patches 作为上下文
+            seq.custom_payload.pending_latents = seq.custom_payload.pending_latents[-STREAMING_CONTEXT_COUNT:]
+
+        # 检查停止条件
         if stop_flag == 1:
             seq.stoped = True
-        elif seq.custom_payload.max_generate_length is not None and len(seq.custom_payload.generated_waveforms) >= seq.custom_payload.max_generate_length:
+        elif seq.custom_payload.max_generate_length is not None and \
+             seq.custom_payload.generated_patch_count >= seq.custom_payload.max_generate_length:
+            # 强制解码剩余的 pending_latents
+            pending_count = len(seq.custom_payload.pending_latents)
+            if pending_count > STREAMING_CONTEXT_COUNT:
+                all_latents = np.stack(seq.custom_payload.pending_latents, axis=0)
+                all_latents = all_latents.reshape(-1, self.feat_dim)
+                decoded_waveform = self.model_runner.decode_latents(all_latents)
+
+                if not seq.custom_payload.is_first_chunk:
+                    skip_samples = STREAMING_CONTEXT_COUNT * PATCH_SIZE * SAMPLES_PER_FRAME
+                    decoded_waveform = decoded_waveform[skip_samples:]
+
+                # 去掉尾部
+                decoded_waveform = decoded_waveform[:-PATCH_SIZE * SAMPLES_PER_FRAME]
+
+                if len(decoded_waveform) > 0:
+                    seq.custom_payload.generated_waveforms.append(decoded_waveform)
+
             seq.stoped = True
 
     def add_request(
@@ -124,7 +188,7 @@ class VoxCPMEngine(LLMEngineBase):
         if prompt_latents is not None:
             wav_latents = prompt_latents
             decode_pad = wav_latents[-self.n_decode_pad_frames:]
-            
+
             wav_latents = wav_latents.reshape(-1, self.patch_size, self.feat_dim)
             audio_feat = np.concatenate([audio_feat, wav_latents], axis=0)
             text_tokens.extend([0 for _ in range(wav_latents.shape[0])])
@@ -146,6 +210,9 @@ class VoxCPMEngine(LLMEngineBase):
                 cfg_value=cfg_value,
                 max_generate_length=max_generate_length,
                 generated_waveforms=[],
+                pending_latents=[],
+                is_first_chunk=True,
+                generated_patch_count=0,
             )
         )
 

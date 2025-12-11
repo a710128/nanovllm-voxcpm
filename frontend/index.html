@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANE VoxCPM TTS Playground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans p-4 md:p-8">
+
+    <div class="max-w-2xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-4xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500">
+                ANE VoxCPM TTS Playground
+            </h1>
+        </header>
+
+        <!-- Tabs -->
+        <div class="flex space-x-1 rounded-xl bg-gray-800 p-1 mb-6">
+            <button id="tab-btn-generate" class="w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-white ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 bg-gray-700 shadow text-purple-400 transition-all duration-200">
+                Generate Speech
+            </button>
+            <button id="tab-btn-create" class="w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-gray-400 ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 hover:bg-gray-700/50 hover:text-white transition-all duration-200">
+                Create Voice
+            </button>
+        </div>
+
+        <div id="status-message" class="hidden p-4 rounded-lg mb-6 text-center"></div>
+
+        <!-- GENERATE TAB -->
+        <div id="tab-content-generate">
+            <form id="tts-form" class="space-y-6 bg-gray-800 p-6 rounded-xl shadow-2xl">
+
+                <div>
+                    <label for="text-input" class="block text-sm font-medium text-gray-300 mb-2">
+                        Text to Generate
+                    </label>
+                    <textarea id="text-input" rows="4" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition" placeholder="Enter text to synthesize...">Jittery Jack's jam jars jiggled jauntily, jolting Jack's jumbled jelly-filled jars joyously.
+Cindy's circular cymbals clanged cheerfully, clashing crazily near Carla's crashing crockery.
+You think you can just waltz in here and cause chaos? Well, I've got news for you.</textarea>
+                </div>
+
+                <div>
+                    <label for="voice-select" class="flex items-center text-sm font-medium text-gray-300 mb-2">
+                        <span>Voice Selection (Optional)</span>
+                        <a href="https://gregr.org/tts-samples/" target="_blank" rel="noopener noreferrer" class="ml-2 text-sm text-purple-400 hover:text-purple-300 transition-colors">
+                            (See Samples)
+                        </a>
+                    </label>
+                    <select id="voice-select" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition">
+                        <option value="">Use Prompt Audio</option>
+                    </select>
+                    <div id="voice-status" class="mt-2 text-sm text-gray-400"></div>
+                </div>
+
+                <div id="prompt-section">
+                    <label for="prompt-wav-path" class="flex items-center text-sm font-medium text-gray-300 mb-2">
+                        <span>Prompt WAV Path (Optional for Voice Cloning)</span>
+                        <div class="relative group ml-2">
+                            <span class="w-4 h-4 flex items-center justify-center bg-gray-600 text-gray-300 text-xs font-bold rounded-full cursor-help">?</span>
+                            <div class="absolute hidden group-hover:block left-full ml-3 top-1/2 -translate-y-1/2 w-72 p-3 bg-black text-white text-sm rounded-lg shadow-lg z-10 transition-all duration-150 ease-in-out opacity-0 group-hover:opacity-100 pointer-events-none">
+                                Random sounding voice if unspecified.
+                            </div>
+                        </div>
+                    </label>
+                    <input type="text" id="prompt-wav-path" value="" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition">
+                </div>
+
+                <div id="prompt-text-section">
+                    <label for="prompt-text" class="flex items-center text-sm font-medium text-gray-300 mb-2">
+                        <span>Prompt Text (Required when using prompt WAV)</span>
+                        
+                        <div class="relative group ml-2">
+                            <span class="w-4 h-4 flex items-center justify-center bg-gray-600 text-gray-300 text-xs font-bold rounded-full cursor-help">?</span>
+                            <div class="absolute hidden group-hover:block left-full ml-3 top-1/2 -translate-y-1/2 w-72 p-3 bg-black text-white text-sm rounded-lg shadow-lg z-10 transition-all duration-150 ease-in-out opacity-0 group-hover:opacity-100 pointer-events-none">
+                                This text is transcribed from the 'Prompt WAV' and is used to condition the model on the voice's acoustic properties. It <strong>must</strong> be an accurate transcription of the prompt audio.
+                            </div>
+                        </div>
+                        </label>
+                    <textarea id="prompt-text" rows="2" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition" placeholder="Not required if using a provided voice"></textarea>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label for="max-length" class="block text-sm font-medium text-gray-300 mb-2">
+                            Max Length (0.04s per unit)
+                        </label>
+                        <input type="number" id="max-length" value="2048" min="1" max="2048" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition">
+                        <div class="mt-1 text-xs text-gray-500">Maximum generated sequence length (1-2048)</div>
+                    </div>
+                    <div>
+                        <label for="cfg-value" class="block text-sm font-medium text-gray-300 mb-2">
+                            CFG Value
+                        </label>
+                        <input type="number" id="cfg-value" value="2.0" min="0.0" max="10.0" step="0.1" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition">
+                        <div class="mt-1 text-xs text-gray-500">Classifier-free guidance value (0.0-10.0)</div>
+                    </div>
+                    <div>
+                        <label for="inference-timesteps" class="flex items-center text-sm font-medium text-gray-300 mb-2">
+                            <span>Inference Timesteps</span>
+
+                            <div class="relative group ml-2">
+                                <span class="w-4 h-4 flex items-center justify-center bg-gray-600 text-gray-300 text-xs font-bold rounded-full cursor-help">?</span>
+                                <div class="absolute hidden group-hover:block left-full ml-3 top-1/2 -translate-y-1/2 w-72 p-3 bg-black text-white text-sm rounded-lg shadow-lg z-10 transition-all duration-150 ease-in-out opacity-0 group-hover:opacity-100 pointer-events-none">
+                                    Controls the number of diffusion steps. A higher number (e.g., 20) is slower but may increase quality. A lower number (e.g., 5-10) is faster. This model works well with 10.
+                                </div>
+                            </div>
+                            </label>
+                        <input type="number" id="inference-timesteps" value="10" min="1" max="100" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition">
+                        <div class="mt-1 text-xs text-gray-500">Number of inference steps (1-100)</div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <button type="submit" id="play-button" class="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:from-purple-700 hover:to-pink-700 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                        <span id="play-button-text">Generate & Play</span>
+                        <div id="spinner" class="hidden spinner w-5 h-5 border-t-2 border-b-2 border-white rounded-full"></div>
+                    </button>
+
+                    <button type="button" id="generate-full-button" class="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:bg-blue-700 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 9.293a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+                        <span id="generate-full-button-text">Generate Full Audio</span>
+                        <div id="generate-full-spinner" class="hidden spinner w-5 h-5 border-t-2 border-b-2 border-white rounded-full"></div>
+                    </button>
+                    <button type="button" id="stop-button" class="flex-1 bg-gray-600 text-gray-200 font-bold py-3 px-6 rounded-lg shadow-lg hover:bg-gray-500 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        Stop Generation
+                    </button>
+                </div>
+            </form>
+
+            <div id="audio-player-container" class="hidden mt-6 bg-gray-800 p-4 rounded-xl shadow-2xl">
+                <label class="block text-sm font-medium text-gray-300 mb-3">
+                    Full Audio Playback
+                </label>
+                <audio id="audio-player" controls class="w-full"></audio>
+            </div>
+        </div>
+
+        <!-- CREATE VOICE TAB -->
+        <div id="tab-content-create" class="hidden">
+            <form id="create-voice-form" class="space-y-6 bg-gray-800 p-6 rounded-xl shadow-2xl">
+                <div>
+                    <h2 class="text-xl font-semibold mb-4 text-purple-400">Create New Cached Voice</h2>
+                    <p class="text-sm text-gray-400 mb-6">Upload an audio file and its transcription to create a reusable voice.</p>
+                </div>
+
+                <div>
+                    <label for="new-voice-name" class="block text-sm font-medium text-gray-300 mb-2">
+                        Voice Name
+                    </label>
+                    <input type="text" id="new-voice-name" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition" placeholder="my-custom-voice" required>
+                </div>
+
+                <div>
+                    <label for="new-voice-audio" class="block text-sm font-medium text-gray-300 mb-2">
+                        Prompt Audio File
+                    </label>
+                    <input type="file" id="new-voice-audio" accept="audio/*" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700" required>
+                    <div class="mt-1 text-xs text-gray-500">Supported: WAV, MP3, FLAC, OGG (5-15 seconds recommended)</div>
+                </div>
+
+                <div>
+                    <label for="new-voice-text" class="block text-sm font-medium text-gray-300 mb-2">
+                        Prompt Transcription
+                    </label>
+                    <textarea id="new-voice-text" rows="3" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none transition" placeholder="Exact transcription of the audio content..." required></textarea>
+                    <div class="mt-1 text-xs text-gray-500">Must match the audio content exactly for best results</div>
+                </div>
+
+                <div>
+                    <label class="flex items-center space-x-3">
+                        <input type="checkbox" id="new-voice-replace" class="form-checkbox h-5 w-5 text-purple-600 rounded focus:ring-purple-500 bg-gray-700 border-gray-600">
+                        <span class="text-gray-300 font-medium">Replace if exists</span>
+                    </label>
+                </div>
+
+                <button type="submit" id="create-voice-btn" class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-teal-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:from-green-700 hover:to-teal-700 transition duration-300">
+                    <span id="create-voice-btn-text">Create Voice</span>
+                    <div id="create-voice-spinner" class="hidden spinner w-5 h-5 border-t-2 border-b-2 border-white rounded-full"></div>
+                </button>
+            </form>
+        </div>
+
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const ttsForm = document.getElementById('tts-form');
+        const playButton = document.getElementById('play-button');
+        const playButtonText = document.getElementById('play-button-text');
+        const stopButton = document.getElementById('stop-button');
+        const spinner = document.getElementById('spinner');
+        const statusMessage = document.getElementById('status-message');
+
+        const textInput = document.getElementById('text-input');
+        const promptTextInput = document.getElementById('prompt-text');
+        const promptWavPathInput = document.getElementById('prompt-wav-path');
+        
+        // --- Voice Selection Elements ---
+        const voiceSelect = document.getElementById('voice-select');
+        const voiceStatus = document.getElementById('voice-status');
+        const promptSection = document.getElementById('prompt-section');
+        const promptTextSection = document.getElementById('prompt-text-section');
+        
+        // --- Parameter Elements ---
+        const maxLengthInput = document.getElementById('max-length');
+        const cfgValueInput = document.getElementById('cfg-value');
+        const inferenceTimestepsInput = document.getElementById('inference-timesteps');
+        
+        // --- Audio Player Elements ---
+        const audioPlayerContainer = document.getElementById('audio-player-container');
+        const audioPlayer = document.getElementById('audio-player');
+        
+        // --- Full Generation Button Elements ---
+        const generateFullButton = document.getElementById('generate-full-button');
+        const generateFullButtonText = document.getElementById('generate-full-button-text');
+        const generateFullSpinner = document.getElementById('generate-full-spinner');
+
+        // --- Tabs Elements ---
+        const tabBtnGenerate = document.getElementById('tab-btn-generate');
+        const tabBtnCreate = document.getElementById('tab-btn-create');
+        const tabContentGenerate = document.getElementById('tab-content-generate');
+        const tabContentCreate = document.getElementById('tab-content-create');
+
+        // --- Create Voice Elements ---
+        const createVoiceForm = document.getElementById('create-voice-form');
+        const createVoiceBtn = document.getElementById('create-voice-btn');
+        const createVoiceBtnText = document.getElementById('create-voice-btn-text');
+        const createVoiceSpinner = document.getElementById('create-voice-spinner');
+        const newVoiceNameInput = document.getElementById('new-voice-name');
+        const newVoiceAudioInput = document.getElementById('new-voice-audio');
+        const newVoiceTextInput = document.getElementById('new-voice-text');
+        const newVoiceReplaceCheckbox = document.getElementById('new-voice-replace');
+
+        // --- AudioContext Variables ---
+        let audioContext;
+        let streamReader;
+        let nextStartTime = 0; // Time at which the next audio chunk should start playing
+        let isPlaying = false;
+        let sampleRate = 16000; // Default, will try to get from header
+        
+        // --- Array to store audio chunks for final playback ---
+        let audioChunks = [];
+
+        // --- Tab Switching Logic ---
+        function switchTab(tab) {
+            hideStatus();
+            if (tab === 'generate') {
+                tabContentGenerate.classList.remove('hidden');
+                tabContentCreate.classList.add('hidden');
+
+                tabBtnGenerate.className = "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-white ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 bg-gray-700 shadow text-purple-400 transition-all duration-200";
+                tabBtnCreate.className = "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-gray-400 ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 hover:bg-gray-700/50 hover:text-white transition-all duration-200";
+            } else {
+                tabContentGenerate.classList.add('hidden');
+                tabContentCreate.classList.remove('hidden');
+
+                tabBtnCreate.className = "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-white ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 bg-gray-700 shadow text-purple-400 transition-all duration-200";
+                tabBtnGenerate.className = "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-gray-400 ring-white ring-opacity-60 ring-offset-2 ring-offset-blue-400 focus:outline-none focus:ring-2 hover:bg-gray-700/50 hover:text-white transition-all duration-200";
+            }
+        }
+
+        tabBtnGenerate.addEventListener('click', () => switchTab('generate'));
+        tabBtnCreate.addEventListener('click', () => switchTab('create'));
+
+        // --- Load available voices on page load ---
+        async function loadAvailableVoices() {
+            try {
+                const response = await fetch('/voices');
+                const data = await response.json();
+                
+                // Clear existing options except the first one
+                voiceSelect.innerHTML = '<option value="">Use Prompt Audio</option>';
+                
+                // Add voice options
+                data.voices.forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice;
+                    option.textContent = voice;
+                    voiceSelect.appendChild(option);
+                });
+                
+                voiceStatus.textContent = `Found ${data.count} available voices`;
+                voiceStatus.className = 'mt-2 text-sm text-green-400';
+                
+            } catch (error) {
+                console.error('Error loading voices:', error);
+                voiceStatus.textContent = 'Failed to load available voices';
+                voiceStatus.className = 'mt-2 text-sm text-red-400';
+            }
+        }
+
+        // --- Handle voice selection changes ---
+        voiceSelect.addEventListener('change', (event) => {
+            const selectedVoice = event.target.value;
+            if (selectedVoice) {
+                promptSection.style.display = 'none';
+                promptTextSection.style.display = 'none';
+                voiceStatus.textContent = `Using cached voice: ${selectedVoice}`;
+                voiceStatus.className = 'mt-2 text-sm text-blue-400';
+            } else {
+                promptSection.style.display = 'block';
+                promptTextSection.style.display = 'block';
+                voiceStatus.textContent = 'Using prompt audio';
+                voiceStatus.className = 'mt-2 text-sm text-gray-400';
+            }
+        });
+
+        // --- Load voices when page loads ---
+        loadAvailableVoices();
+
+        // --- Utility to show status messages ---
+        function showStatus(message, type = 'info') {
+            statusMessage.textContent = message;
+            statusMessage.className = 'p-4 rounded-lg mb-6 text-center '; // Reset classes
+            
+            if (type === 'error') {
+                statusMessage.classList.add('bg-red-800', 'text-red-100');
+            } else if (type === 'success') {
+                statusMessage.classList.add('bg-green-800', 'text-green-100');
+            } else { // 'info'
+                statusMessage.classList.add('bg-blue-800', 'text-blue-100');
+            }
+            statusMessage.classList.remove('hidden');
+        }
+        function hideStatus() {
+            statusMessage.classList.add('hidden');
+        }
+        
+        // --- UI State Management ---
+        function setPlayingState(playing) {
+            isPlaying = playing;
+            if (playing) {
+                playButton.disabled = true;
+                generateFullButton.disabled = true;
+                stopButton.disabled = false;
+                spinner.classList.remove('hidden');
+                playButtonText.textContent = 'Generating...';
+            } else {
+                playButton.disabled = false;
+                generateFullButton.disabled = false;
+                stopButton.disabled = true;
+                spinner.classList.add('hidden');
+                playButtonText.textContent = 'Generate & Play';
+                
+                generateFullSpinner.classList.add('hidden');
+                generateFullButtonText.textContent = 'Generate Full Audio';
+                
+                streamReader = null;
+            }
+        }
+        
+        function setFullGeneratingState(generating) {
+            if (generating) {
+                playButton.disabled = true;
+                generateFullButton.disabled = true;
+                stopButton.disabled = false;
+                generateFullSpinner.classList.remove('hidden');
+                generateFullButtonText.textContent = 'Generating...';
+            } else {
+                setPlayingState(false);
+            }
+        }
+
+        // --- Helper: Read file as base64 ---
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    // Remove data URL prefix (e.g., "data:audio/wav;base64,")
+                    const base64 = reader.result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // --- Create Voice Handler ---
+        createVoiceForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideStatus();
+
+            const name = newVoiceNameInput.value.trim();
+            const audioFile = newVoiceAudioInput.files[0];
+            const promptText = newVoiceTextInput.value.trim();
+            const replace = newVoiceReplaceCheckbox.checked;
+
+            if (!name || !audioFile || !promptText) {
+                showStatus('All fields are required.', 'error');
+                return;
+            }
+
+            // Validate file size (max 10MB)
+            if (audioFile.size > 10 * 1024 * 1024) {
+                showStatus('Audio file too large. Maximum size is 10MB.', 'error');
+                return;
+            }
+
+            createVoiceBtn.disabled = true;
+            createVoiceBtnText.textContent = 'Uploading...';
+            createVoiceSpinner.classList.remove('hidden');
+
+            try {
+                // Read file as base64
+                const audioBase64 = await readFileAsBase64(audioFile);
+
+                // Get file extension for format
+                const ext = audioFile.name.split('.').pop().toLowerCase();
+                const format = ['wav', 'mp3', 'flac', 'ogg'].includes(ext) ? ext : 'wav';
+
+                createVoiceBtnText.textContent = 'Creating...';
+
+                const response = await fetch('/v1/voices', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        voice_name: name,
+                        prompt_wav_base64: audioBase64,
+                        prompt_wav_format: format,
+                        prompt_text: promptText,
+                        replace: replace
+                    })
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.detail || 'Failed to create voice');
+                }
+
+                showStatus(`Success! Voice '${name}' created. Switching to Generate tab...`, 'success');
+
+                // Refresh voice list
+                await loadAvailableVoices();
+
+                // Select the new voice
+                voiceSelect.value = name;
+                voiceSelect.dispatchEvent(new Event('change'));
+
+                // Switch back to generate tab after a short delay
+                setTimeout(() => {
+                    switchTab('generate');
+                    createVoiceBtn.disabled = false;
+                    createVoiceBtnText.textContent = 'Create Voice';
+                    createVoiceSpinner.classList.add('hidden');
+                    // Reset form
+                    createVoiceForm.reset();
+                }, 1500);
+
+            } catch (error) {
+                console.error('Create voice error:', error);
+                showStatus(`Error creating voice: ${error.message}`, 'error');
+                createVoiceBtn.disabled = false;
+                createVoiceBtnText.textContent = 'Create Voice';
+                createVoiceSpinner.classList.add('hidden');
+            }
+        });
+
+        // --- Form Submit Handler (Streaming) ---
+        ttsForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().then(() => console.log('Previous AudioContext closed.'));
+            }
+            audioPlayerContainer.classList.add('hidden');
+            if (audioPlayer.src) {
+                URL.revokeObjectURL(audioPlayer.src);
+            }
+            audioPlayer.src = '';
+            audioChunks = [];
+            
+            const text = textInput.value;
+            if (!text.trim()) {
+                showStatus('Please enter some text to generate.', 'error');
+                return;
+            }
+
+            hideStatus();
+            setPlayingState(true);
+
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                nextStartTime = audioContext.currentTime + 0.1;
+                console.log('AudioContext started, state:', audioContext.state);
+            } catch (e) {
+                console.error('Error creating AudioContext:', e);
+                showStatus('Error: Could not initialize Web Audio. ' + e.message, 'error');
+                setPlayingState(false);
+                return;
+            }
+
+            try {
+                const requestBody = {
+                    input: text,
+                    response_format: 'pcm',
+                    max_length: parseInt(maxLengthInput.value),
+                    cfg_value: parseFloat(cfgValueInput.value),
+                    inference_timesteps: parseInt(inferenceTimestepsInput.value)
+                };
+
+                const selectedVoice = voiceSelect.value;
+                if (selectedVoice) {
+                    requestBody.voice = selectedVoice;
+                } else {
+                    requestBody.prompt_wav_path = promptWavPathInput.value;
+                    requestBody.prompt_text = promptTextInput.value;
+                }
+
+                const response = await fetch('/v1/audio/speech/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/octet-stream',
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    const errorBody = await response.json();
+                    throw new Error(errorBody.detail || `Server error: ${response.status}`);
+                }
+
+                const headerSampleRate = response.headers.get('X-Sample-Rate');
+                if (headerSampleRate) {
+                    sampleRate = parseInt(headerSampleRate, 10);
+                    console.log('Using sample rate from header:', sampleRate);
+                } else {
+                    console.warn(`No X-Sample-Rate header found, defaulting to ${sampleRate}Hz.`);
+                }
+                
+                streamReader = response.body.getReader();
+
+                showStatus('Streaming... Audio will play shortly.', 'info');
+                playButtonText.textContent = 'Playing...';
+                
+                processStream();
+
+            } catch (error) {
+                console.error('Fetch error:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+                setPlayingState(false);
+                if (audioContext && audioContext.state !== 'closed') {
+                    audioContext.close();
+                }
+            }
+        });
+
+        // --- Full Generation Button Handler ---
+        generateFullButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().then(() => console.log('Previous AudioContext closed.'));
+            }
+            audioPlayerContainer.classList.add('hidden');
+            if (audioPlayer.src) {
+                URL.revokeObjectURL(audioPlayer.src);
+            }
+            audioPlayer.src = '';
+            audioChunks = [];
+            
+            const text = textInput.value;
+            if (!text.trim()) {
+                showStatus('Please enter some text to generate.', 'error');
+                return;
+            }
+
+            hideStatus();
+            setFullGeneratingState(true);
+
+            try {
+                const requestBody = {
+                    input: text,
+                    response_format: 'wav',
+                    max_length: parseInt(maxLengthInput.value),
+                    cfg_value: parseFloat(cfgValueInput.value),
+                    inference_timesteps: parseInt(inferenceTimestepsInput.value)
+                };
+
+                const selectedVoice = voiceSelect.value;
+                if (selectedVoice) {
+                    requestBody.voice = selectedVoice;
+                } else {
+                    requestBody.prompt_wav_path = promptWavPathInput.value;
+                    requestBody.prompt_text = promptTextInput.value;
+                }
+
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'audio/wav',
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                if (!response.ok) {
+                    let errorMsg;
+                    try {
+                        const errorBody = await response.json();
+                        errorMsg = errorBody.detail;
+                    } catch (e) {
+                        errorMsg = response.statusText;
+                    }
+                    throw new Error(errorMsg || `Server error: ${response.status}`);
+                }
+
+                const audioBlob = await response.blob();
+                
+                if (audioBlob.size === 0) {
+                    throw new Error('Received empty audio file from server.');
+                }
+                
+                if (audioBlob.type === 'application/json') {
+                     throw new Error('Server returned an error. Check server logs.');
+                }
+
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer.src = audioUrl;
+                audioPlayerContainer.classList.remove('hidden');
+                
+                showStatus('Full audio generation successful.', 'success');
+                setFullGeneratingState(false);
+
+            } catch (error) {
+                console.error('Full generation error:', error);
+                if (isPlaying) {
+                     showStatus(`Error: ${error.message}`, 'error');
+                }
+                setFullGeneratingState(false);
+            }
+        });
+
+        // --- Stop Button Handler ---
+        stopButton.addEventListener('click', async () => {
+            if (streamReader) {
+                streamReader.cancel('User stopped playback.').catch(() => {});
+            }
+            
+            try {
+                const response = await fetch('/v1/audio/speech/cancel', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('Server cancellation successful:', result.message);
+                } else {
+                    console.error('Server cancellation failed:', response.status);
+                }
+            } catch (error) {
+                console.error('Error calling server cancellation:', error);
+            }
+            
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close().then(() => {
+                    console.log('AudioContext closed by user.');
+                });
+                audioContext = null;
+            }
+            
+            setPlayingState(false);
+            showStatus('Generation/Playback stopped by user.', 'info');
+        });
+
+        // --- Core Stream Processing Function ---
+        async function processStream() {
+            if (!streamReader) return;
+
+            try {
+                const { done, value } = await streamReader.read();
+
+                if (done) {
+                    console.log('Stream download finished. Waiting for playback to complete.');
+                    
+                    if (audioContext && audioContext.state !== 'closed' && isPlaying) {
+                        buildFinalAudio(); 
+
+                        const remainingTimeInSeconds = nextStartTime - audioContext.currentTime;
+                        const delayInMs = Math.max(0, remainingTimeInSeconds * 1000) + 250;
+                        
+                        console.log(`Playback will finish in ${remainingTimeInSeconds.toFixed(2)}s. Closing context in ${delayInMs.toFixed(0)}ms.`);
+
+                        setTimeout(() => {
+                            if (audioContext && audioContext.state !== 'closed') {
+                                audioContext.close().then(() => console.log('AudioContext closed after finishing.'));
+                                audioContext = null;
+                            }
+                            
+                            if (isPlaying) { 
+                                showStatus('Playback finished.', 'success');
+                                setPlayingState(false);
+                            }
+                        }, delayInMs);
+
+                    } else {
+                        if (isPlaying) {
+                            setPlayingState(false);
+                        }
+                    }
+                    return;
+                }
+
+                const chunkByteLength = value.byteLength;
+                const alignedByteLength = chunkByteLength - (chunkByteLength % 2);
+                
+                if (alignedByteLength === 0) {
+                    processStream();
+                    return;
+                }
+                
+                const pcm16Data = new Int16Array(
+                    value.buffer,
+                    value.byteOffset,
+                    alignedByteLength / 2
+                );
+
+                const numSamples = pcm16Data.length;
+                const pcm32Data = new Float32Array(numSamples);
+                for (let i = 0; i < numSamples; i++) {
+                    pcm32Data[i] = pcm16Data[i] / 32768.0;
+                }
+                
+                audioChunks.push(pcm32Data);
+
+                if (!audioContext || audioContext.state === 'closed') {
+                    console.log('AudioContext is closed, stopping stream processing.');
+                    return;
+                }
+                const audioBuffer = audioContext.createBuffer(
+                    1,
+                    numSamples,
+                    sampleRate
+                );
+                audioBuffer.getChannelData(0).set(pcm32Data);
+
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                const playTime = Math.max(nextStartTime, audioContext.currentTime);
+                source.start(playTime);
+
+                nextStartTime = playTime + audioBuffer.duration;
+
+                processStream();
+
+            } catch (error) {
+                if (error.name === 'AbortError' || (error.message && error.message.includes('User stopped'))) {
+                    console.log('Stream reading cancelled by user.');
+                    buildFinalAudio();
+                } else {
+                    console.error('Error reading stream:', error);
+                    showStatus(`Stream error: ${error.message}`, 'error');
+                }
+                setPlayingState(false);
+                if (audioContext && audioContext.state !== 'closed') {
+                    audioContext.close();
+                }
+            }
+        }
+        
+        function buildFinalAudio() {
+            if (!audioChunks.length) { 
+                console.log('No audio chunks to build final audio.');
+                return;
+            }
+
+            try {
+                const totalSamples = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                if (totalSamples === 0) {
+                    console.log('No samples to build audio.');
+                    return;
+                }
+
+                const offlineCtx = new OfflineAudioContext(1, totalSamples, sampleRate);
+                const bufferSource = offlineCtx.createBufferSource();
+
+                const finalBuffer = offlineCtx.createBuffer(1, totalSamples, sampleRate);
+                let offset = 0;
+                for (const chunk of audioChunks) {
+                    finalBuffer.getChannelData(0).set(chunk, offset);
+                    offset += chunk.length;
+                }
+
+                bufferSource.buffer = finalBuffer;
+                bufferSource.connect(offlineCtx.destination);
+                bufferSource.start();
+
+                offlineCtx.startRendering().then(renderedBuffer => {
+                    const wavBlob = bufferToWave(renderedBuffer);
+                    const audioUrl = URL.createObjectURL(wavBlob);
+                    
+                    audioPlayer.src = audioUrl;
+                    audioPlayerContainer.classList.remove('hidden');
+                }).catch(e => {
+                    console.error('Error rendering final audio:', e);
+                    showStatus('Could not render final audio file.', 'error');
+                });
+
+            } catch (e) {
+                console.error('Error building final audio:', e);
+                showStatus('Could not build final audio file.', 'error');
+            }
+        }
+        
+        function bufferToWave(audioBuffer) {
+            const numOfChan = audioBuffer.numberOfChannels;
+            const sampleRate = audioBuffer.sampleRate;
+            const length = audioBuffer.length * numOfChan * 2 + 44;
+            const buffer = new ArrayBuffer(length);
+            const view = new DataView(buffer);
+            const channels = [];
+            let i, sample;
+            let offset = 0;
+
+            for (i = 0; i < numOfChan; i++) {
+                channels.push(audioBuffer.getChannelData(i));
+            }
+
+            writeString(view, offset, 'RIFF'); offset += 4;
+            view.setUint32(offset, length - 8, true); offset += 4;
+            writeString(view, offset, 'WAVE'); offset += 4;
+            writeString(view, offset, 'fmt '); offset += 4;
+            view.setUint32(offset, 16, true); offset += 4;
+            view.setUint16(offset, 1, true); offset += 2;
+            view.setUint16(offset, numOfChan, true); offset += 2;
+            view.setUint32(offset, sampleRate, true); offset += 4;
+            view.setUint32(offset, sampleRate * 2 * numOfChan, true); offset += 4;
+            view.setUint16(offset, numOfChan * 2, true); offset += 2;
+            view.setUint16(offset, 16, true); offset += 2;
+            writeString(view, offset, 'data'); offset += 4;
+            view.setUint32(offset, length - 44, true); offset += 4;
+
+            for (i = 0; i < audioBuffer.length; i++) {
+                for (let chan = 0; chan < numOfChan; chan++) {
+                    sample = Math.max(-1, Math.min(1, channels[chan][i]));
+                    sample = (sample < 0 ? sample * 0x8000 : sample * 0x7FFF) | 0;
+                    view.setInt16(offset, sample, true);
+                    offset += 2;
+                }
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+    </script>
+</body>
+</html>

@@ -50,16 +50,16 @@ class VoxCPMServerImpl:
         return {
             "status": "ok",
         }
-    
+
     def encode_latents(self, wav : bytes, wav_format : str):
         wav, sr = torchaudio.load(io.BytesIO(wav), format=wav_format)
         wav = wav.cuda()
         if sr != self.sample_rate:
             wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
-        
+
         if wav.size(0) > 1:
             wav = wav.mean(dim=0, keepdim=True)
-        
+
         align_size = self.llm.patch_size * self.llm.chunk_size
         if wav.size(1) % align_size != 0:
             remained = align_size - wav.size(1) % align_size
@@ -67,7 +67,7 @@ class VoxCPMServerImpl:
 
         latents = self.llm.encode_latents(wav)
         assert latents.shape[0] % self.llm.patch_size == 0
-        
+
         return latents.tobytes()
 
     def add_request(self,
@@ -82,13 +82,13 @@ class VoxCPMServerImpl:
         if prompt_latents is not None:
             if len(prompt_text) == 0:
                 raise ValueError("Prompt text is required when prompt latents are provided")
-            
+
             prompt_latents = np.frombuffer(prompt_latents, dtype=np.float32).reshape(-1, self.llm.feat_dim)
         else:
             prompt_latents = None
             if len(prompt_text) > 0:
                 raise ValueError("Prompt text is not allowed when prompt latents are not provided")
-        
+
         self.llm.add_request(
             seq_id=seq_id,
             target_text=target_text,
@@ -101,10 +101,10 @@ class VoxCPMServerImpl:
 
     def cancel(self, seq_id : str):
         self.llm.cancel_sequence(seq_id)
-    
+
     def step(self):
         return self.llm.step()
-    
+
     def is_finished(self):
         return self.llm.is_finished()
 
@@ -121,6 +121,10 @@ def main_loop(
     states = {
         "is_stoped": False,
     }
+
+    # 跟踪每个序列已发送的 waveform 数量
+    sent_waveform_count = {}
+
     def method_call(cmd):
         try:
             opid = cmd["id"]
@@ -164,27 +168,43 @@ def main_loop(
                     queue_out.put(method_call(cmd))
                 except Empty:
                     break
-            
+
             if states["is_stoped"]:
                 break
-            
+
             # then do llm step
             output = srv.step()
 
             # update output
             for seq in output:
-                latest_waveform = seq.custom_payload.generated_waveforms[-1]
-                queue_out.put({
-                    "type": "stream",
-                    "id": seq.seq_id,
-                    "data": latest_waveform,
-                })
+                seq_id = seq.seq_id
+                waveforms = seq.custom_payload.generated_waveforms
+                current_count = len(waveforms)
+
+                # 初始化计数器
+                if seq_id not in sent_waveform_count:
+                    sent_waveform_count[seq_id] = 0
+
+                # 发送所有新的 waveforms
+                sent_count = sent_waveform_count[seq_id]
+                while sent_count < current_count:
+                    queue_out.put({
+                        "type": "stream",
+                        "id": seq_id,
+                        "data": waveforms[sent_count],
+                    })
+                    sent_count += 1
+                sent_waveform_count[seq_id] = sent_count
+
+                # 序列结束时发送 None 并清理
                 if seq.is_finished:
                     queue_out.put({
                         "type": "stream",
-                        "id": seq.seq_id,
+                        "id": seq_id,
                         "data": None,
                     })
+                    if seq_id in sent_waveform_count:
+                        del sent_waveform_count[seq_id]
 
 
 class AsyncVoxCPMServer:
@@ -206,7 +226,7 @@ class AsyncVoxCPMServer:
         self.queue_in = ctx.Queue()
         self.queue_out = ctx.Queue()
         self.process = ctx.Process(
-            target=main_loop, 
+            target=main_loop,
             args=(self.queue_in, self.queue_out, (model_path, inference_timesteps, max_num_batched_tokens, max_num_seqs, max_model_len, gpu_memory_utilization, enforce_eager, devices), {}),
             daemon=True,
         )
@@ -215,7 +235,7 @@ class AsyncVoxCPMServer:
         self.recv_task = asyncio.create_task(self.recv_queue())
         self.op_table = {}
         self.stream_table : dict[str, asyncio.Queue] = {}
-    
+
     async def recv_queue(self):
         while True:
             try:
@@ -238,7 +258,7 @@ class AsyncVoxCPMServer:
                     del self.op_table[res["id"]]
             else:
                 print(f"Unknown op_id: {res['id']}")
-    
+
     async def submit(self, cmd : str, *args, **kwargs):
         op_id = str(uuid.uuid4())
 
@@ -254,21 +274,21 @@ class AsyncVoxCPMServer:
             "kwargs": kwargs,
         })
         return await fut
-    
+
     async def health(self):
         return await self.submit("health")
-    
+
     async def wait_for_ready(self):
         await self.health()
-    
+
     async def encode_latents(self, wav : bytes, wav_format : str):
         return await self.submit("encode_latents", wav, wav_format)
-    
+
     async def stop(self):
         await self.submit("stop")
         self.recv_task.cancel()
         await asyncio.to_thread(self.process.join)
-    
+
     async def generate(
         self,
         target_text : str,
@@ -325,22 +345,22 @@ class AsyncVoxCPMServerPool:
             )
             for device_idx in devices
         ]
-        
+
         self.servers_load = np.zeros(len(self.servers), dtype=np.int32)
 
         self._prompt_pool = {}
 
     async def wait_for_ready(self):
         await asyncio.gather(*[server.wait_for_ready() for server in self.servers])
-    
+
     async def stop(self):
         await asyncio.gather(*[server.stop() for server in self.servers])
-    
+
     async def encode_latents(self, wav : bytes, wav_format : str):
         # send to one
         min_load_server_idx = np.argmin(self.servers_load)
         return await self.servers[min_load_server_idx].encode_latents(wav, wav_format)
-    
+
     async def add_prompt(self, wav : bytes, wav_format : str, prompt_text : str):
         prompt_id = gen_uuid()
         prompt_latents = await self.encode_latents(wav, wav_format)
@@ -349,10 +369,10 @@ class AsyncVoxCPMServerPool:
             "text": prompt_text,
         }
         return prompt_id
-    
+
     async def remove_prompt(self, prompt_id : str):
         del self._prompt_pool[prompt_id]
-    
+
     async def generate(
         self,
         target_text : str,
@@ -387,7 +407,7 @@ class AsyncVoxCPMServerPool:
             self.servers_load[min_load_server_idx] -= 1
 
 class SyncVoxCPMServerPool:
-    def __init__(self, 
+    def __init__(self,
             model_path : str,
             inference_timesteps : int = 10,
             max_num_batched_tokens : int = 16384,
@@ -414,7 +434,7 @@ class SyncVoxCPMServerPool:
         self.loop = asyncio.new_event_loop()
         self.server_pool = self.loop.run_until_complete(init_async_server_pool())
         self.loop.run_until_complete(self.server_pool.wait_for_ready())
-    
+
     def stop(self):
         self.loop.run_until_complete(self.server_pool.stop())
         self.loop.close()
@@ -422,13 +442,13 @@ class SyncVoxCPMServerPool:
 
     def encode_latents(self, wav : bytes, wav_format : str):
         return self.loop.run_until_complete(self.server_pool.encode_latents(wav, wav_format))
-    
+
     def add_prompt(self, wav : bytes, wav_format : str, prompt_text : str):
         return self.loop.run_until_complete(self.server_pool.add_prompt(wav, wav_format, prompt_text))
-    
+
     def remove_prompt(self, prompt_id : str):
         return self.loop.run_until_complete(self.server_pool.remove_prompt(prompt_id))
-    
+
     def generate(self, target_text : str, prompt_latents : bytes | None = None, prompt_text : str = "", prompt_id : str | None = None, max_generate_length : int = 2000, temperature : float = 1.0, cfg_value : float = 2.0):
         async_gen = self.server_pool.generate(target_text, prompt_latents, prompt_text, prompt_id, max_generate_length, temperature, cfg_value)
         try:
@@ -437,5 +457,3 @@ class SyncVoxCPMServerPool:
                 yield item
         except StopAsyncIteration:
             return
-
-    
