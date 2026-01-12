@@ -1,7 +1,7 @@
 import os
 import json
 from huggingface_hub import snapshot_download
-from typing import List
+from typing import List, Optional
 import asyncio
 
 try:
@@ -9,6 +9,8 @@ try:
     import flash_attn
 except ImportError:
     raise ImportError("flash-attn is not installed. Please install it with `pip install flash-attn --no-build-isolation`")
+
+from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
 
 
 class VoxCPM:
@@ -22,6 +24,7 @@ class VoxCPM:
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
         devices : List[int] = [],
+        lora_config: Optional[LoRAConfig] = None,
         **kwargs,
     ):
         if "~" in model:
@@ -67,6 +70,7 @@ class VoxCPM:
                     gpu_memory_utilization=gpu_memory_utilization,
                     enforce_eager=enforce_eager,
                     devices=devices,
+                    lora_config=lora_config,
                     **kwargs,
                 )
             else:
@@ -79,6 +83,7 @@ class VoxCPM:
                     gpu_memory_utilization=gpu_memory_utilization,
                     enforce_eager=enforce_eager,
                     devices=devices,
+                    lora_config=lora_config,
                     **kwargs,
                 )
         else:

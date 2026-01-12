@@ -1,15 +1,26 @@
 import torch
 from torch import nn
 import torch.distributed as dist
+from typing import Optional
 
 from nanovllm_voxcpm.layers.activation import SiluAndMul
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.layers.layernorm import RMSNorm
 from nanovllm_voxcpm.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
+from nanovllm_voxcpm.layers.lora import (
+    LoRAQKVParallelLinear, 
+    LoRAMergedColumnParallelLinear, 
+    LoRARowParallelLinear,
+    LoRALinear,
+    iter_lora_modules,
+    set_all_lora_enabled,
+    reset_all_lora_parameters,
+    get_lora_state_dict,
+)
 from nanovllm_voxcpm.layers.embed_head import VocabParallelEmbedding
 import math
 
-from nanovllm_voxcpm.models.voxcpm.config import MiniCPM4Config, CfmConfig, VoxCPMConfig
+from nanovllm_voxcpm.models.voxcpm.config import MiniCPM4Config, CfmConfig, VoxCPMConfig, LoRAConfig
 from nanovllm_voxcpm.utils.context import get_context
 
 def rotate_half(x):
@@ -166,6 +177,7 @@ class Cpm4Attention(nn.Module):
         rope_theta: float = 10000,
         rope_scaling: dict | None = None,
         apply_qk_norm: bool = False,
+        lora_config: Optional[LoRAConfig] = None,
     ) -> None:
         super().__init__()
         tp_size = dist.get_world_size()
@@ -185,19 +197,51 @@ class Cpm4Attention(nn.Module):
         self.apply_qk_norm = apply_qk_norm
         self.is_causal = is_causal
         
-
-        self.qkv_proj = QKVParallelLinear(
-            hidden_size,
-            self.head_dim,
-            self.total_num_heads,
-            self.total_num_kv_heads,
-            bias=qkv_bias,
-        )
-        self.o_proj = RowParallelLinear(
-            self.total_num_heads * self.head_dim,
-            hidden_size,
-            bias=qkv_bias,
-        )
+        # Determine LoRA parameters for attention projections
+        lora_r = lora_config.r if lora_config else 0
+        lora_alpha = lora_config.alpha if lora_config else 16.0
+        lora_dropout = lora_config.dropout if lora_config else 0.0
+        lora_targets = lora_config.target_modules_lm if lora_config else []
+        
+        # QKV projection with optional LoRA
+        qkv_lora_targets = [t.replace("_proj", "") for t in lora_targets if t in ["q_proj", "k_proj", "v_proj"]]
+        if lora_r > 0 and qkv_lora_targets:
+            self.qkv_proj = LoRAQKVParallelLinear(
+                hidden_size,
+                self.head_dim,
+                self.total_num_heads,
+                self.total_num_kv_heads,
+                bias=qkv_bias,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                lora_targets=qkv_lora_targets,
+            )
+        else:
+            self.qkv_proj = QKVParallelLinear(
+                hidden_size,
+                self.head_dim,
+                self.total_num_heads,
+                self.total_num_kv_heads,
+                bias=qkv_bias,
+            )
+        
+        # O projection with optional LoRA
+        if lora_r > 0 and "o_proj" in lora_targets:
+            self.o_proj = LoRARowParallelLinear(
+                self.total_num_heads * self.head_dim,
+                hidden_size,
+                bias=qkv_bias,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+            )
+        else:
+            self.o_proj = RowParallelLinear(
+                self.total_num_heads * self.head_dim,
+                hidden_size,
+                bias=qkv_bias,
+            )
         self.rotary_emb = get_cpm4_rope(
             head_size=self.head_dim,
             rotary_dim=self.head_dim,
@@ -281,18 +325,57 @@ class Cpm4MLP(nn.Module):
         self,
         hidden_size: int,
         intermediate_size: int,
+        lora_config: Optional[LoRAConfig] = None,
     ) -> None:
         super().__init__()
-        self.gate_up_proj = MergedColumnParallelLinear(
-            hidden_size,
-            [intermediate_size] * 2,
-            bias=False,
-        )
-        self.down_proj = RowParallelLinear(
-            intermediate_size,
-            hidden_size,
-            bias=False,
-        )
+        
+        # Determine LoRA parameters for MLP projections
+        lora_r = lora_config.r if lora_config else 0
+        lora_alpha = lora_config.alpha if lora_config else 16.0
+        lora_dropout = lora_config.dropout if lora_config else 0.0
+        lora_targets = lora_config.target_modules_lm if lora_config else []
+        
+        # gate_up_proj with optional LoRA
+        gate_up_lora_targets = []
+        if "gate_proj" in lora_targets:
+            gate_up_lora_targets.append(0)
+        if "up_proj" in lora_targets:
+            gate_up_lora_targets.append(1)
+        
+        if lora_r > 0 and gate_up_lora_targets:
+            self.gate_up_proj = LoRAMergedColumnParallelLinear(
+                hidden_size,
+                [intermediate_size] * 2,
+                bias=False,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                lora_targets=gate_up_lora_targets,
+            )
+        else:
+            self.gate_up_proj = MergedColumnParallelLinear(
+                hidden_size,
+                [intermediate_size] * 2,
+                bias=False,
+            )
+        
+        # down_proj with optional LoRA
+        if lora_r > 0 and "down_proj" in lora_targets:
+            self.down_proj = LoRARowParallelLinear(
+                intermediate_size,
+                hidden_size,
+                bias=False,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+            )
+        else:
+            self.down_proj = RowParallelLinear(
+                intermediate_size,
+                hidden_size,
+                bias=False,
+            )
+        
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
@@ -307,7 +390,8 @@ class Cpm4DecoderLayer(nn.Module):
     def __init__(
         self,
         config : MiniCPM4Config,
-        is_causal: bool = True, 
+        is_causal: bool = True,
+        lora_config: Optional[LoRAConfig] = None,
     ) -> None:
         super().__init__()
         self.self_attn = Cpm4Attention(
@@ -322,10 +406,12 @@ class Cpm4DecoderLayer(nn.Module):
             rope_theta=getattr(config, "rope_theta", 10000),
             rope_scaling=getattr(config, "rope_scaling", None),
             apply_qk_norm=getattr(config, 'apply_qk_norm', False),
+            lora_config=lora_config,
         )
         self.mlp = Cpm4MLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
+            lora_config=lora_config,
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -359,6 +445,7 @@ class Cpm4Model(nn.Module):
         self,
         config: MiniCPM4Config,
         is_causal: bool = True,
+        lora_config: Optional[LoRAConfig] = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -368,7 +455,10 @@ class Cpm4Model(nn.Module):
         else:
             self.embed_tokens = nn.Identity()
         
-        self.layers = nn.ModuleList([Cpm4DecoderLayer(config, is_causal) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([
+            Cpm4DecoderLayer(config, is_causal, lora_config) 
+            for _ in range(config.num_hidden_layers)
+        ])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -436,6 +526,7 @@ class VoxCPMLocDiT(nn.Module):
         self,
         config: MiniCPM4Config,
         in_channels: int = 64,
+        lora_config: Optional[LoRAConfig] = None,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -457,7 +548,19 @@ class VoxCPMLocDiT(nn.Module):
         )
 
         assert config.vocab_size == 0, "vocab_size must be 0 for local DiT"
-        self.decoder = Cpm4Model(config, is_causal=False)
+        # Create DiT-specific LoRA config if provided
+        dit_lora_config = None
+        if lora_config and lora_config.enable_dit:
+            dit_lora_config = LoRAConfig(
+                enable_lm=True,  # Use the same mechanism
+                enable_dit=False,
+                r=lora_config.r,
+                alpha=lora_config.alpha,
+                dropout=lora_config.dropout,
+                target_modules_lm=lora_config.target_modules_dit,  # Use DiT targets
+                target_modules_dit=[],
+            )
+        self.decoder = Cpm4Model(config, is_causal=False, lora_config=dit_lora_config)
 
     def forward(
         self,
@@ -674,24 +777,29 @@ class VoxCPMModel(nn.Module):
         self,
         config: VoxCPMConfig,
         inference_timesteps: int,
+        lora_config: Optional[LoRAConfig] = None,
     ):
         super().__init__()
         self.config = config
+        self.lora_config = lora_config
         self.feat_dim = config.feat_dim
         self.patch_size = config.patch_size
 
         assert not self.config.lm_config.use_mup, "mup inference is not supported now"
 
+        # Determine LoRA config for LM layers
+        lm_lora_config = lora_config if (lora_config and lora_config.enable_lm) else None
+
         # Text-Semantic LM
-        self.base_lm = Cpm4Model(config.lm_config)
+        self.base_lm = Cpm4Model(config.lm_config, lora_config=lm_lora_config)
 
         # Residual Acoustic LM
         residual_lm_config = config.lm_config.model_copy(deep=True)
         residual_lm_config.num_hidden_layers = config.residual_lm_num_layers
         residual_lm_config.vocab_size = 0
-        self.residual_lm = Cpm4Model(residual_lm_config)
+        self.residual_lm = Cpm4Model(residual_lm_config, lora_config=lm_lora_config)
 
-        # Local Encoder
+        # Local Encoder (no LoRA for encoder)
         encoder_config = config.lm_config.model_copy(deep=True)
         encoder_config.hidden_size = config.encoder_config.hidden_dim
         encoder_config.intermediate_size = config.encoder_config.ffn_dim
@@ -714,7 +822,7 @@ class VoxCPMModel(nn.Module):
             patch_size=config.patch_size,
             inference_timesteps=inference_timesteps,
             cfm_params=config.dit_config.cfm_config,
-            estimator=VoxCPMLocDiT(decoder_config, in_channels=config.feat_dim),
+            estimator=VoxCPMLocDiT(decoder_config, in_channels=config.feat_dim, lora_config=lora_config),
         )
 
         # Projection layers
@@ -724,9 +832,39 @@ class VoxCPMModel(nn.Module):
             config.scalar_quantization_latent_dim, 
             config.scalar_quantization_scale
         )
-        self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
-        self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
-        self.res_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
+        
+        # Determine LoRA config for projection layers
+        proj_lora_r = lora_config.r if (lora_config and lora_config.enable_proj) else 0
+        proj_lora_alpha = lora_config.alpha if lora_config else 16.0
+        proj_lora_dropout = lora_config.dropout if lora_config else 0.0
+        proj_targets = lora_config.target_proj_modules if lora_config else []
+        
+        # enc_to_lm_proj
+        if proj_lora_r > 0 and "enc_to_lm_proj" in proj_targets:
+            self.enc_to_lm_proj = LoRALinear(
+                config.encoder_config.hidden_dim, config.lm_config.hidden_size,
+                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha, lora_dropout=proj_lora_dropout
+            )
+        else:
+            self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
+        
+        # lm_to_dit_proj
+        if proj_lora_r > 0 and "lm_to_dit_proj" in proj_targets:
+            self.lm_to_dit_proj = LoRALinear(
+                config.lm_config.hidden_size, config.dit_config.hidden_dim,
+                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha, lora_dropout=proj_lora_dropout
+            )
+        else:
+            self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
+        
+        # res_to_dit_proj
+        if proj_lora_r > 0 and "res_to_dit_proj" in proj_targets:
+            self.res_to_dit_proj = LoRALinear(
+                config.lm_config.hidden_size, config.dit_config.hidden_dim,
+                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha, lora_dropout=proj_lora_dropout
+            )
+        else:
+            self.res_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
 
         # Stop Predictor
         self.stop_proj = nn.Linear(config.lm_config.hidden_size, config.lm_config.hidden_size)
@@ -808,3 +946,23 @@ class VoxCPMModel(nn.Module):
             "latents":  pred_feat, 
             "stop_flag": stop_flag,
         }
+    
+    # ------------------------------------------------------------------ #
+    # LoRA Management Methods
+    # ------------------------------------------------------------------ #
+    
+    def set_lora_enabled(self, enabled: bool):
+        """Enable/disable all LoRA layers (without unloading weights)."""
+        set_all_lora_enabled(self, enabled)
+    
+    def reset_lora_parameters(self):
+        """Reset all LoRA parameters to initial state (effectively unloading LoRA)."""
+        reset_all_lora_parameters(self)
+    
+    def get_lora_state_dict(self) -> dict:
+        """Get all LoRA parameters (lora_A/lora_B)."""
+        return get_lora_state_dict(self)
+    
+    def iter_lora_modules(self):
+        """Iterate over all LoRA modules in the model."""
+        return iter_lora_modules(self)

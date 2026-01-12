@@ -1,7 +1,7 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pydantic import BaseModel
-from typing import Generic, TypeVar, List
+from typing import Generic, TypeVar, List, Any
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -19,6 +19,7 @@ class Config(Generic[T]):
 
     model_config: T | None = None
     devices : List[int] | None = None
+    lora_config: Any = None  # Optional[LoRAConfig]
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

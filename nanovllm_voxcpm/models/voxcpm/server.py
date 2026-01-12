@@ -1,4 +1,6 @@
 from nanovllm_voxcpm.models.voxcpm.engine import VoxCPMEngine, VoxCPMConfig, Config
+from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
+from nanovllm_voxcpm.utils.loader import load_lora_weights
 import os
 import torch.multiprocessing as mp
 from queue import Empty
@@ -8,7 +10,7 @@ import torchaudio
 import io
 import torch
 import asyncio
-from typing import List
+from typing import List, Optional
 import numpy as np
 import random
 
@@ -25,12 +27,15 @@ class VoxCPMServerImpl:
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
         devices : List[int] = [],
+        lora_config: Optional[LoRAConfig] = None,
     ):
         model_config = VoxCPMConfig.model_validate_json(
             open(os.path.join(model_path, "config.json")).read()
         )
 
         model_config.inference_timesteps = inference_timesteps
+        self.lora_config = lora_config
+        self.model_path = model_path
 
         engine_config = Config(
             model=model_path,
@@ -41,6 +46,7 @@ class VoxCPMServerImpl:
             enforce_eager=enforce_eager,
             model_config=model_config,
             devices=devices,
+            lora_config=lora_config,
         )
 
         self.llm = VoxCPMEngine(engine_config)
@@ -102,6 +108,39 @@ class VoxCPMServerImpl:
     
     def is_finished(self):
         return self.llm.is_finished()
+    
+    # ------------------------------------------------------------------ #
+    # LoRA Management Methods
+    # ------------------------------------------------------------------ #
+    
+    def set_lora_enabled(self, enabled: bool):
+        """Enable/disable LoRA layers."""
+        if self.lora_config is None:
+            raise RuntimeError("LoRA is not configured for this model")
+        self.llm.model_runner.model.set_lora_enabled(enabled)
+        return {"status": "ok", "lora_enabled": enabled}
+    
+    def load_lora(self, lora_path: str):
+        """Load LoRA weights from a path."""
+        if self.lora_config is None:
+            raise RuntimeError("LoRA is not configured for this model. Initialize with lora_config.")
+        loaded, skipped = load_lora_weights(
+            self.llm.model_runner.model, 
+            lora_path, 
+            device="cuda"
+        )
+        return {
+            "status": "ok", 
+            "loaded_keys": len(loaded), 
+            "skipped_keys": len(skipped)
+        }
+    
+    def reset_lora(self):
+        """Reset LoRA weights to initial state (effectively unload)."""
+        if self.lora_config is None:
+            raise RuntimeError("LoRA is not configured for this model")
+        self.llm.model_runner.model.reset_lora_parameters()
+        return {"status": "ok"}
 
 
 def main_loop(
@@ -192,6 +231,7 @@ class AsyncVoxCPMServer:
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
         devices : List[int] = [],
+        lora_config: Optional[LoRAConfig] = None,
         **kwargs,
     ):
         if len(kwargs) > 0:
@@ -202,7 +242,7 @@ class AsyncVoxCPMServer:
         self.queue_out = ctx.Queue()
         self.process = ctx.Process(
             target=main_loop, 
-            args=(self.queue_in, self.queue_out, (model_path, inference_timesteps, max_num_batched_tokens, max_num_seqs, max_model_len, gpu_memory_utilization, enforce_eager, devices), {}),
+            args=(self.queue_in, self.queue_out, (model_path, inference_timesteps, max_num_batched_tokens, max_num_seqs, max_model_len, gpu_memory_utilization, enforce_eager, devices, lora_config), {}),
             daemon=True,
         )
         self.process.start()
@@ -290,6 +330,16 @@ class AsyncVoxCPMServer:
             if not is_normal_exit:
                 await self.submit("cancel", seq_id)
             del self.stream_table[seq_id]
+    
+    # LoRA management methods
+    async def set_lora_enabled(self, enabled: bool):
+        return await self.submit("set_lora_enabled", enabled)
+    
+    async def load_lora(self, lora_path: str):
+        return await self.submit("load_lora", lora_path)
+    
+    async def reset_lora(self):
+        return await self.submit("reset_lora")
 
 
 class AsyncVoxCPMServerPool:
@@ -302,6 +352,7 @@ class AsyncVoxCPMServerPool:
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
         devices : List[int] = [],
+        lora_config: Optional[LoRAConfig] = None,
         **kwargs,
     ):
         if len(kwargs) > 0:
@@ -317,6 +368,7 @@ class AsyncVoxCPMServerPool:
                 gpu_memory_utilization=gpu_memory_utilization,
                 enforce_eager=enforce_eager,
                 devices=[device_idx],
+                lora_config=lora_config,
             )
             for device_idx in devices
         ]
@@ -380,6 +432,19 @@ class AsyncVoxCPMServerPool:
                 yield data
         finally:
             self.servers_load[min_load_server_idx] -= 1
+    
+    # LoRA management methods (apply to all servers)
+    async def set_lora_enabled(self, enabled: bool):
+        results = await asyncio.gather(*[server.set_lora_enabled(enabled) for server in self.servers])
+        return results[0]
+    
+    async def load_lora(self, lora_path: str):
+        results = await asyncio.gather(*[server.load_lora(lora_path) for server in self.servers])
+        return results[0]
+    
+    async def reset_lora(self):
+        results = await asyncio.gather(*[server.reset_lora() for server in self.servers])
+        return results[0]
 
 class SyncVoxCPMServerPool:
     def __init__(self, 
@@ -391,6 +456,7 @@ class SyncVoxCPMServerPool:
             gpu_memory_utilization: float = 0.9,
             enforce_eager: bool = False,
             devices : List[int] = [],
+            lora_config: Optional[LoRAConfig] = None,
             **kwargs,
         ):
         async def init_async_server_pool():
@@ -403,6 +469,7 @@ class SyncVoxCPMServerPool:
                 gpu_memory_utilization=gpu_memory_utilization,
                 enforce_eager=enforce_eager,
                 devices=devices,
+                lora_config=lora_config,
                 **kwargs,
             )
 
@@ -432,5 +499,13 @@ class SyncVoxCPMServerPool:
                 yield item
         except StopAsyncIteration:
             return
-
     
+    # LoRA management methods
+    def set_lora_enabled(self, enabled: bool):
+        return self.loop.run_until_complete(self.server_pool.set_lora_enabled(enabled))
+    
+    def load_lora(self, lora_path: str):
+        return self.loop.run_until_complete(self.server_pool.load_lora(lora_path))
+    
+    def reset_lora(self):
+        return self.loop.run_until_complete(self.server_pool.reset_lora())

@@ -31,6 +31,7 @@ class VoxCPMRunner(BaseModelRunner):
         self.inference_timesteps = config.model_config.inference_timesteps
         self.feat_dim = config.model_config.feat_dim
         self.patch_size = config.model_config.patch_size
+        self.lora_config = config.lora_config
         super().__init__(config, rank, device_idx, distributed_port, event)
     
     @property
@@ -38,7 +39,7 @@ class VoxCPMRunner(BaseModelRunner):
         return torch.bfloat16
     
     def init_model(self, model_config : VoxCPMConfig, model_path : str):
-        self.model = VoxCPMModel(model_config, self.inference_timesteps)
+        self.model = VoxCPMModel(model_config, self.inference_timesteps, lora_config=self.lora_config)
         load_model(self.model, model_path)
 
         torch.set_default_dtype(torch.float32)

@@ -5,7 +5,7 @@ import soundfile as sf
 
 async def tts_request(text : str):
     async with aiohttp.ClientSession() as session:
-        async with session.post("http://localhost:8080/generate", json={"target_text": text}) as response:
+        async with session.post("http://localhost:8000/generate", json={"target_text": text}) as response:
             return await response.content.read()
 
 async def main():
@@ -32,7 +32,7 @@ async def main():
         for task in done:
             if cnt < 10:
                 wav = np.frombuffer(task.result(), dtype=np.float32)
-                sf.write(f"test_{cnt}.wav", wav, 16000)
+                sf.write(f"test_{cnt}.wav", wav, 44100)
             cnt += 1
             print(f"Processed {cnt} tasks")
 
