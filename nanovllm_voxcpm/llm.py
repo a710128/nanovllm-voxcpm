@@ -8,7 +8,9 @@ try:
     # check if flash-attn is installed
     import flash_attn
 except ImportError:
-    raise ImportError("flash-attn is not installed. Please install it with `pip install flash-attn --no-build-isolation`")
+    raise ImportError(
+        "flash-attn is not installed. Please install it with `pip install flash-attn --no-build-isolation`"
+    )
 
 from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
 
@@ -17,13 +19,13 @@ class VoxCPM:
     @staticmethod
     def from_pretrained(
         model: str,
-        inference_timesteps : int = 10,
-        max_num_batched_tokens : int = 16384,
-        max_num_seqs : int = 512,
-        max_model_len : int = 4096,
+        inference_timesteps: int = 10,
+        max_num_batched_tokens: int = 16384,
+        max_num_seqs: int = 512,
+        max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
-        devices : List[int] = [],
+        devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
         **kwargs,
     ):
@@ -36,29 +38,31 @@ class VoxCPM:
                 model_path = snapshot_download(repo_id=model)
             else:
                 model_path = model
-        
+
         config_file = os.path.expanduser(os.path.join(model_path, "config.json"))
-        
+
         if not os.path.isfile(config_file):
             raise FileNotFoundError(f"Config file `{config_file}` not found")
-        
+
         config = json.load(open(config_file))
 
         arch = config["architecture"]
 
         if len(devices) == 0:
             devices = [0]
-        
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             is_async_mode = False
         else:
             is_async_mode = True
-            
 
         if arch == "voxcpm":
-            from nanovllm_voxcpm.models.voxcpm.server import AsyncVoxCPMServerPool, SyncVoxCPMServerPool
+            from nanovllm_voxcpm.models.voxcpm.server import (
+                AsyncVoxCPMServerPool,
+                SyncVoxCPMServerPool,
+            )
 
             if is_async_mode:
                 return AsyncVoxCPMServerPool(

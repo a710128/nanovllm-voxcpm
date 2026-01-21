@@ -20,6 +20,8 @@ dependencies = [
     "tqdm",
     "numpy",
     "pydantic",
+    "flash-attn",
+    "soundfile>=0.13.1",
 ]
 
 [project.urls]
@@ -28,3 +30,30 @@ Homepage="https://github.com/a710128/nanovllm-voxcpm"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nanovllm_voxcpm*"]
+
+[tool.black]
+line-length = 120
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+

@@ -13,19 +13,19 @@ import torch
 @dataclass
 class VoxCPMSeqPayload:
     # [(T, P, D)]
-    feats : list[np.ndarray]
+    feats: list[np.ndarray]
 
-    text_tokens : list[int]
-    feat_masks : list[bool]
-    
-    generated_waveforms : list[np.ndarray]
+    text_tokens: list[int]
+    feat_masks: list[bool]
 
-    temperature : float
-    cfg_value : float
+    generated_waveforms: list[np.ndarray]
 
-    decode_pad : np.ndarray | None = None
-    max_generate_length : int | None = None
-    
+    temperature: float
+    cfg_value: float
+
+    decode_pad: np.ndarray | None = None
+    max_generate_length: int | None = None
+
 
 class VoxCPMEngine(LLMEngineBase):
     def __init__(self, config: Config[VoxCPMConfig]):
@@ -37,9 +37,8 @@ class VoxCPMEngine(LLMEngineBase):
 
         self.tokenizer = mask_multichar_chinese_tokens(LlamaTokenizerFast.from_pretrained(config.model))
 
-
         super().__init__(VoxCPMRunner, config, config.tensor_parallel_size)
-    
+
     def preprocess_seq(self, seq: Sequence[VoxCPMSeqPayload], is_prefill: bool) -> RunnerTask[VoxCPMPayload]:
         if is_prefill:
             if len(seq.custom_payload.feats) > 1:
@@ -52,13 +51,19 @@ class VoxCPMEngine(LLMEngineBase):
                 seq.num_cached_tokens,
                 seq.block_size,
                 VoxCPMPayload(
-                    text_tokens=np.array(seq.custom_payload.text_tokens[seq.num_cached_tokens:], dtype=np.int64),
-                    feats=seq.custom_payload.feats[-1][seq.num_cached_tokens:],
-                    feat_masks=np.array(seq.custom_payload.feat_masks[seq.num_cached_tokens:], dtype=np.bool_),
+                    text_tokens=np.array(
+                        seq.custom_payload.text_tokens[seq.num_cached_tokens :],
+                        dtype=np.int64,
+                    ),
+                    feats=seq.custom_payload.feats[-1][seq.num_cached_tokens :],
+                    feat_masks=np.array(
+                        seq.custom_payload.feat_masks[seq.num_cached_tokens :],
+                        dtype=np.bool_,
+                    ),
                     temperature=seq.custom_payload.temperature,
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
-                )
+                ),
             )
         else:
             return RunnerTask(
@@ -73,9 +78,8 @@ class VoxCPMEngine(LLMEngineBase):
                     temperature=seq.custom_payload.temperature,
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
-                )
+                ),
             )
-
 
     def postprocess_seq(self, seq: Sequence[VoxCPMSeqPayload], outputs: dict, is_prefill: bool):
         stop_flag = outputs["stop_flag"]
@@ -92,25 +96,30 @@ class VoxCPMEngine(LLMEngineBase):
 
         latents = latents.reshape(-1, self.feat_dim)
         if seq.custom_payload.decode_pad is not None:
-            seq.custom_payload.decode_pad = np.concatenate([seq.custom_payload.decode_pad, latents], axis=0)[-self.n_decode_pad_frames:]
+            seq.custom_payload.decode_pad = np.concatenate([seq.custom_payload.decode_pad, latents], axis=0)[
+                -self.n_decode_pad_frames :
+            ]
         else:
-            seq.custom_payload.decode_pad = latents[-self.n_decode_pad_frames:]
+            seq.custom_payload.decode_pad = latents[-self.n_decode_pad_frames :]
 
         if stop_flag == 1:
             seq.stoped = True
-        elif seq.custom_payload.max_generate_length is not None and len(seq.custom_payload.generated_waveforms) >= seq.custom_payload.max_generate_length:
+        elif (
+            seq.custom_payload.max_generate_length is not None
+            and len(seq.custom_payload.generated_waveforms) >= seq.custom_payload.max_generate_length
+        ):
             seq.stoped = True
 
     def add_request(
-            self,
-            seq_id : str,
-            target_text : str,
-            prompt_text : str = "",
-            prompt_latents : np.ndarray = None,
-            max_generate_length : int = 2000,
-            temperature : float = 1.0,
-            cfg_value : float = 1.0,
-        ):
+        self,
+        seq_id: str,
+        target_text: str,
+        prompt_text: str = "",
+        prompt_latents: np.ndarray = None,
+        max_generate_length: int = 2000,
+        temperature: float = 1.0,
+        cfg_value: float = 1.0,
+    ):
         text_tokens = self.tokenizer(prompt_text + target_text) + [self.audio_start_token]
         audio_feat = np.zeros((len(text_tokens), self.patch_size, self.feat_dim), dtype=np.float32)
         feat_masks = [False for _ in range(len(text_tokens))]
@@ -122,8 +131,8 @@ class VoxCPMEngine(LLMEngineBase):
 
         if prompt_latents is not None:
             wav_latents = prompt_latents
-            decode_pad = wav_latents[-self.n_decode_pad_frames:]
-            
+            decode_pad = wav_latents[-self.n_decode_pad_frames :]
+
             wav_latents = wav_latents.reshape(-1, self.patch_size, self.feat_dim)
             audio_feat = np.concatenate([audio_feat, wav_latents], axis=0)
             text_tokens.extend([0 for _ in range(wav_latents.shape[0])])
@@ -145,13 +154,13 @@ class VoxCPMEngine(LLMEngineBase):
                 cfg_value=cfg_value,
                 max_generate_length=max_generate_length,
                 generated_waveforms=[],
-            )
+            ),
         )
 
         self.add_sequence(seq)
 
-    def encode_latents(self, wav : torch.Tensor, align_size : int = -1) -> np.ndarray:
-        """ Encode wav to latents
+    def encode_latents(self, wav: torch.Tensor, align_size: int = -1) -> np.ndarray:
+        """Encode wav to latents
         This function will pad the wav to the nearest multiple of the chunk size.
         Args:
             wav: (1, T)

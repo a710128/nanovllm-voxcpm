@@ -6,10 +6,14 @@ from typing import Optional
 from nanovllm_voxcpm.layers.activation import SiluAndMul
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.layers.layernorm import RMSNorm
-from nanovllm_voxcpm.layers.linear import QKVParallelLinear, MergedColumnParallelLinear, RowParallelLinear
+from nanovllm_voxcpm.layers.linear import (
+    QKVParallelLinear,
+    MergedColumnParallelLinear,
+    RowParallelLinear,
+)
 from nanovllm_voxcpm.layers.lora import (
-    LoRAQKVParallelLinear, 
-    LoRAMergedColumnParallelLinear, 
+    LoRAQKVParallelLinear,
+    LoRAMergedColumnParallelLinear,
     LoRARowParallelLinear,
     LoRALinear,
     iter_lora_modules,
@@ -20,8 +24,14 @@ from nanovllm_voxcpm.layers.lora import (
 from nanovllm_voxcpm.layers.embed_head import VocabParallelEmbedding
 import math
 
-from nanovllm_voxcpm.models.voxcpm.config import MiniCPM4Config, CfmConfig, VoxCPMConfig, LoRAConfig
+from nanovllm_voxcpm.models.voxcpm.config import (
+    MiniCPM4Config,
+    CfmConfig,
+    VoxCPMConfig,
+    LoRAConfig,
+)
 from nanovllm_voxcpm.utils.context import get_context
+
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
@@ -31,7 +41,7 @@ def rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     """Applies Rotary Position Embedding to the query and key tensors.
-    
+
     This is equivalent to the MiniCPM modeling implementation.
     """
     orig_dtype = k.dtype
@@ -64,22 +74,22 @@ class MiniCPMLongRoPE(nn.Module):
         self.short_factor = short_factor or [1.0] * (head_size // 2)
         self.long_factor = long_factor or [1.0] * (head_size // 2)
         self.original_max_position_embeddings = original_max_position_embeddings or max_position_embeddings
-        
+
         # Calculate scaling factor (kept for compatibility, but not used to scale cos/sin amplitude)
-        scale = (max_position_embeddings / self.original_max_position_embeddings)
+        scale = max_position_embeddings / self.original_max_position_embeddings
         self.scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
-        
+
         # Create base inverse frequencies
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float() / self.dim))
-        self.register_buffer('inv_freq', inv_freq, persistent=False)
-        
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
         # Pre-compute cos/sin cache
         self._set_cos_sin_cache(max_position_embeddings, self.inv_freq.device, torch.float32)
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        
+
         if seq_len > self.original_max_position_embeddings:
             ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=device)
         else:
@@ -87,13 +97,13 @@ class MiniCPMLongRoPE(nn.Module):
 
         freqs = torch.mul(
             torch.outer(t, 1.0 / ext_factors).to(device=device),
-            self.inv_freq.to(device=device).to(dtype)
+            self.inv_freq.to(device=device).to(dtype),
         )
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         # Do NOT scale cos/sin amplitude; only frequency is scaled by ext_factors
-        self.register_buffer('cos_cached', emb.cos().to(dtype)* self.scaling_factor, persistent=False)
-        self.register_buffer('sin_cached', emb.sin().to(dtype)* self.scaling_factor, persistent=False)
+        self.register_buffer("cos_cached", emb.cos().to(dtype) * self.scaling_factor, persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype) * self.scaling_factor, persistent=False)
 
     def forward(
         self,
@@ -105,39 +115,39 @@ class MiniCPMLongRoPE(nn.Module):
         # query: [t, h, d]
         # key: [t, h, d]
         num_tokens = positions.size(0)
-        
+
         # Get cos/sin for the positions
         cos = self.cos_cached[positions]  # [num_tokens, head_dim]
         sin = self.sin_cached[positions]  # [num_tokens, head_dim]
-        
+
         # Apply rotary embedding using the original nano-vllm method but with corrected math
         query_shape = query.shape
         query = query.reshape(num_tokens, -1, self.dim)
         query = self._apply_rotary_emb(query, cos, sin).view(query_shape)
-        
+
         key_shape = key.shape
         key = key.reshape(num_tokens, -1, self.dim)
         key = self._apply_rotary_emb(key, cos, sin).view(key_shape)
-        
+
         return query, key
-    
+
     def _apply_rotary_emb(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         """Apply rotary embedding with corrected math matching modeling_minicpm.py"""
         # x: [num_tokens, num_heads, head_dim]
         # cos/sin: [num_tokens, head_dim] from _set_cos_sin_cache (already repeated)
-        
+
         cos = cos.unsqueeze(1)  # [num_tokens, 1, head_dim] to broadcast over heads
         sin = sin.unsqueeze(1)  # [num_tokens, 1, head_dim] to broadcast over heads
-        
+
         orig_dtype = x.dtype
         x = x.to(torch.float32)
         cos = cos.to(torch.float32)
         sin = sin.to(torch.float32)
-        
+
         # Apply standard RoPE: (x * cos) + (rotate_half(x) * sin)
         x1, x2 = torch.chunk(x, 2, dim=-1)
         rotate_half_x = torch.cat((-x2, x1), dim=-1)
-        
+
         result = x * cos + rotate_half_x * sin
         return result.to(orig_dtype)
 
@@ -157,13 +167,13 @@ def get_cpm4_rope(
         base=base,
         short_factor=rope_scaling.short_factor if rope_scaling else None,
         long_factor=rope_scaling.long_factor if rope_scaling else None,
-        original_max_position_embeddings=rope_scaling.original_max_position_embeddings if rope_scaling else None,
+        original_max_position_embeddings=(rope_scaling.original_max_position_embeddings if rope_scaling else None),
     )
     return rotary_emb
 
 
 class Cpm4Attention(nn.Module):
-    
+
     def __init__(
         self,
         hidden_size: int,
@@ -196,12 +206,12 @@ class Cpm4Attention(nn.Module):
         self.max_position = max_position
         self.apply_qk_norm = apply_qk_norm
         self.is_causal = is_causal
-        
+
         # Determine LoRA parameters for attention projections
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
         lora_targets = lora_config.target_modules_lm if lora_config else []
-        
+
         # QKV projection with optional LoRA
         qkv_lora_targets = [t.replace("_proj", "") for t in lora_targets if t in ["q_proj", "k_proj", "v_proj"]]
         if lora_r > 0 and qkv_lora_targets:
@@ -223,7 +233,7 @@ class Cpm4Attention(nn.Module):
                 self.total_num_kv_heads,
                 bias=qkv_bias,
             )
-        
+
         # O projection with optional LoRA
         if lora_r > 0 and "o_proj" in lora_targets:
             self.o_proj = LoRARowParallelLinear(
@@ -275,11 +285,11 @@ class Cpm4Attention(nn.Module):
                 q_by_head = q.view(-1, self.num_heads, self.head_dim)
                 q_by_head = self.q_norm(q_by_head)
                 q = q_by_head.view(q.shape)
-                
+
                 k_by_head = k.view(-1, self.num_kv_heads, self.head_dim)
                 k_by_head = self.k_norm(k_by_head)
                 k = k_by_head.view(k.shape)
-            
+
             # Apply rotary embedding using nano-vllm interface
             q, k = self.rotary_emb(positions, q, k)
 
@@ -294,11 +304,11 @@ class Cpm4Attention(nn.Module):
                 q_by_head = q.view(-1, self.num_heads, self.head_dim)
                 q_by_head = self.q_norm(q_by_head)
                 q = q_by_head.view(q.shape)
-                
+
                 k_by_head = k.view(-1, self.num_kv_heads, self.head_dim)
                 k_by_head = self.k_norm(k_by_head)
                 k = k_by_head.view(k.shape)
-            
+
             # Apply rotary embedding using nano-vllm interface
             q, k = self.rotary_emb(positions.repeat(B), q, k)
             q = q.view(B, -1, self.num_heads, self.head_dim)
@@ -325,19 +335,19 @@ class Cpm4MLP(nn.Module):
         lora_config: Optional[LoRAConfig] = None,
     ) -> None:
         super().__init__()
-        
+
         # Determine LoRA parameters for MLP projections
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
         lora_targets = lora_config.target_modules_lm if lora_config else []
-        
+
         # gate_up_proj with optional LoRA
         gate_up_lora_targets = []
         if "gate_proj" in lora_targets:
             gate_up_lora_targets.append(0)
         if "up_proj" in lora_targets:
             gate_up_lora_targets.append(1)
-        
+
         if lora_r > 0 and gate_up_lora_targets:
             self.gate_up_proj = LoRAMergedColumnParallelLinear(
                 hidden_size,
@@ -353,7 +363,7 @@ class Cpm4MLP(nn.Module):
                 [intermediate_size] * 2,
                 bias=False,
             )
-        
+
         # down_proj with optional LoRA
         if lora_r > 0 and "down_proj" in lora_targets:
             self.down_proj = LoRARowParallelLinear(
@@ -369,7 +379,7 @@ class Cpm4MLP(nn.Module):
                 hidden_size,
                 bias=False,
             )
-        
+
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
@@ -383,7 +393,7 @@ class Cpm4DecoderLayer(nn.Module):
 
     def __init__(
         self,
-        config : MiniCPM4Config,
+        config: MiniCPM4Config,
         is_causal: bool = True,
         lora_config: Optional[LoRAConfig] = None,
     ) -> None:
@@ -395,11 +405,11 @@ class Cpm4DecoderLayer(nn.Module):
             max_position=config.max_position_embeddings,
             rms_norm_eps=config.rms_norm_eps,
             is_causal=is_causal,
-            qkv_bias=getattr(config, 'attention_bias', False),
-            head_dim=getattr(config, 'head_dim', None),
+            qkv_bias=getattr(config, "attention_bias", False),
+            head_dim=getattr(config, "head_dim", None),
             rope_theta=getattr(config, "rope_theta", 10000),
             rope_scaling=getattr(config, "rope_scaling", None),
-            apply_qk_norm=getattr(config, 'apply_qk_norm', False),
+            apply_qk_norm=getattr(config, "apply_qk_norm", False),
             lora_config=lora_config,
         )
         self.mlp = Cpm4MLP(
@@ -410,7 +420,7 @@ class Cpm4DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         # depth scaling like MiniCPM
-        self.scale_depth = getattr(config, 'scale_depth', 1.0)
+        self.scale_depth = getattr(config, "scale_depth", 1.0)
         self.num_hidden_layers = config.num_hidden_layers
 
     def forward(
@@ -448,11 +458,10 @@ class Cpm4Model(nn.Module):
             self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         else:
             self.embed_tokens = nn.Identity()
-        
-        self.layers = nn.ModuleList([
-            Cpm4DecoderLayer(config, is_causal, lora_config) 
-            for _ in range(config.num_hidden_layers)
-        ])
+
+        self.layers = nn.ModuleList(
+            [Cpm4DecoderLayer(config, is_causal, lora_config) for _ in range(config.num_hidden_layers)]
+        )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -591,12 +600,13 @@ class VoxCPMLocDiT(nn.Module):
 
         return hidden.transpose(1, 2).contiguous()
 
+
 class UnifiedCFM(torch.nn.Module):
     def __init__(
         self,
         in_channels,
-        patch_size : int,
-        inference_timesteps : int,
+        patch_size: int,
+        inference_timesteps: int,
         cfm_params: CfmConfig,
         estimator: VoxCPMLocDiT,
         mean_mode: bool = False,
@@ -646,8 +656,8 @@ class UnifiedCFM(torch.nn.Module):
 
     def optimized_scale(self, positive_flat, negative_flat):
         dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
-        squared_norm = torch.sum(negative_flat ** 2, dim=1, keepdim=True) + 1e-8
-        
+        squared_norm = torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
+
         st_star = dot_product / squared_norm
         return st_star
 
@@ -675,7 +685,7 @@ class UnifiedCFM(torch.nn.Module):
         zero_init_steps = max(1, int(len(t_span) * 0.04))
         for step in range(1, len(t_span)):
             if step <= zero_init_steps:
-                dphi_dt = 0.
+                dphi_dt = 0.0
             else:
                 # Classifier-Free Guidance inference introduced in VoiceBox
                 b = x.size(0)
@@ -695,12 +705,12 @@ class UnifiedCFM(torch.nn.Module):
 
                 dphi_dt = self.estimator(x_in, mu_in, t_in, cond_in, dt_in)
                 dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [x.size(0), x.size(0)], dim=0)
-                
+
                 positive_flat = dphi_dt.view(b, -1)
                 negative_flat = cfg_dphi_dt.view(b, -1)
                 st_star = self.optimized_scale(positive_flat, negative_flat)
                 st_star = st_star.view(b, *([1] * (len(dphi_dt.shape) - 1)))
-                
+
                 dphi_dt = cfg_dphi_dt * st_star + cfg_value[:, None, None] * (dphi_dt - cfg_dphi_dt * st_star)
 
             x = x - dt * dphi_dt
@@ -748,7 +758,7 @@ class ScalarQuantizationLayer(nn.Module):
 
         self.in_proj = nn.Linear(in_dim, latent_dim)
         self.out_proj = nn.Linear(latent_dim, out_dim)
-    
+
     def forward(self, hidden):
         hidden = self.in_proj(hidden)
         hidden = torch.tanh(hidden)
@@ -820,40 +830,46 @@ class VoxCPMModel(nn.Module):
 
         # Projection layers
         self.fsq_layer = ScalarQuantizationLayer(
-            config.lm_config.hidden_size, 
-            config.lm_config.hidden_size, 
-            config.scalar_quantization_latent_dim, 
-            config.scalar_quantization_scale
+            config.lm_config.hidden_size,
+            config.lm_config.hidden_size,
+            config.scalar_quantization_latent_dim,
+            config.scalar_quantization_scale,
         )
-        
+
         # Determine LoRA config for projection layers
         proj_lora_r = lora_config.r if (lora_config and lora_config.enable_proj) else 0
         proj_lora_alpha = lora_config.alpha if lora_config else 16.0
         proj_targets = lora_config.target_proj_modules if lora_config else []
-        
+
         # enc_to_lm_proj
         if proj_lora_r > 0 and "enc_to_lm_proj" in proj_targets:
             self.enc_to_lm_proj = LoRALinear(
-                config.encoder_config.hidden_dim, config.lm_config.hidden_size,
-                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha
+                config.encoder_config.hidden_dim,
+                config.lm_config.hidden_size,
+                lora_r=proj_lora_r,
+                lora_alpha=proj_lora_alpha,
             )
         else:
             self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
-        
+
         # lm_to_dit_proj
         if proj_lora_r > 0 and "lm_to_dit_proj" in proj_targets:
             self.lm_to_dit_proj = LoRALinear(
-                config.lm_config.hidden_size, config.dit_config.hidden_dim,
-                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha
+                config.lm_config.hidden_size,
+                config.dit_config.hidden_dim,
+                lora_r=proj_lora_r,
+                lora_alpha=proj_lora_alpha,
             )
         else:
             self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
-        
+
         # res_to_dit_proj
         if proj_lora_r > 0 and "res_to_dit_proj" in proj_targets:
             self.res_to_dit_proj = LoRALinear(
-                config.lm_config.hidden_size, config.dit_config.hidden_dim,
-                lora_r=proj_lora_r, lora_alpha=proj_lora_alpha
+                config.lm_config.hidden_size,
+                config.dit_config.hidden_dim,
+                lora_r=proj_lora_r,
+                lora_alpha=proj_lora_alpha,
             )
         else:
             self.res_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -862,16 +878,16 @@ class VoxCPMModel(nn.Module):
         self.stop_proj = nn.Linear(config.lm_config.hidden_size, config.lm_config.hidden_size)
         self.stop_actn = nn.SiLU()
         self.stop_head = nn.Linear(config.lm_config.hidden_size, 2, bias=False)
-    
+
     def forward(
-            self,
-            positions : torch.Tensor,
-            text_tokens : torch.Tensor,
-            feat : torch.Tensor,
-            feat_mask : torch.Tensor,
-            temperature : torch.Tensor,
-            cfg_value : torch.Tensor,
-        ):
+        self,
+        positions: torch.Tensor,
+        text_tokens: torch.Tensor,
+        feat: torch.Tensor,
+        feat_mask: torch.Tensor,
+        temperature: torch.Tensor,
+        cfg_value: torch.Tensor,
+    ):
         """
         text_tokens: [T]
         feat: [T, P, D]
@@ -903,10 +919,9 @@ class VoxCPMModel(nn.Module):
             lm_hidden = enc_outputs[last_indices].contiguous()
         else:
             lm_hidden = enc_outputs
-        
 
         ralm_outputs = self.residual_lm(
-            enc_outputs + feat_embeds, 
+            enc_outputs + feat_embeds,
             positions,
         )
 
@@ -919,7 +934,7 @@ class VoxCPMModel(nn.Module):
             ralm_hidden = ralm_outputs
             # (b, P, D)
             prefix_feat_cond = feat
-        
+
         dit_hidden_1 = self.lm_to_dit_proj(lm_hidden)  # [b, h_dit]
         dit_hidden_2 = self.res_to_dit_proj(ralm_hidden)  # [b, h_dit]
         dit_hidden = dit_hidden_1 + dit_hidden_2  # [b, h_dit]
@@ -935,26 +950,26 @@ class VoxCPMModel(nn.Module):
         stop_flag = self.stop_head(self.stop_actn(self.stop_proj(lm_hidden))).argmax(dim=-1)
 
         return {
-            "latents":  pred_feat, 
+            "latents": pred_feat,
             "stop_flag": stop_flag,
         }
-    
+
     # ------------------------------------------------------------------ #
     # LoRA Management Methods
     # ------------------------------------------------------------------ #
-    
+
     def set_lora_enabled(self, enabled: bool):
         """Enable/disable all LoRA layers (without unloading weights)."""
         set_all_lora_enabled(self, enabled)
-    
+
     def reset_lora_parameters(self):
         """Reset all LoRA parameters to initial state (effectively unloading LoRA)."""
         reset_all_lora_parameters(self)
-    
+
     def get_lora_state_dict(self) -> dict:
         """Get all LoRA parameters (lora_A/lora_B)."""
         return get_lora_state_dict(self)
-    
+
     def iter_lora_modules(self):
         """Iterate over all LoRA modules in the model."""
         return iter_lora_modules(self)

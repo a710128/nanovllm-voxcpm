@@ -1,22 +1,23 @@
 """
 Synchronous LoRA Test Script
 """
+
 from nanovllm_voxcpm import VoxCPM
-from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
+from nanovllm_voxcpm.models.voxcpm.server import LoRAConfig, SyncVoxCPMServerPool
 import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 import time
 
+
 def main():
     # ==================== Configuration ====================
-    MODEL_PATH = "~/VoxCPM1.5"          # Base model path
-    LORA_PATH = "/path/to/lora_weights.ckpt"    # LoRA weights path, None means not loading
+    MODEL_PATH = "~/VoxCPM1.5"  # Base model path
+    LORA_PATH = "/path/to/lora_weights.ckpt"  # LoRA weights path, None means not loading
 
-    
-    LORA_R = 32                            # LoRA rank
-    LORA_ALPHA = 16.0                      # LoRA alpha
-    
+    LORA_R = 32  # LoRA rank
+    LORA_ALPHA = 16.0  # LoRA alpha
+
     TEXT = "I have a dream that my four little children will one day live in a nation where they will not be judged by the color of their skin but by the content of their character. I have a dream today! I have a dream that one day, down in Alabama, with its vicious racists, with its governor having his lips dripping with the words of interposition and nullification; one day right down in Alabama little black boys and black girls will be able to join hands with little white boys and white girls as sisters and brothers. I have a dream today! I have a dream that one day every valley shall be exalted, and every hill and mountain shall be made low, the rough places will be made plain, and the crooked places will be made straight, and the glory of the Lord shall be revealed and all flesh shall see it together."
     OUTPUT_FILE = "test_lora.wav"
     CFG_VALUE = 1.5
@@ -36,7 +37,7 @@ def main():
     )
 
     print("Loading model with LoRA...")
-    server = VoxCPM.from_pretrained(
+    server: SyncVoxCPMServerPool = VoxCPM.from_pretrained(
         MODEL_PATH,
         max_num_batched_tokens=8192,
         max_num_seqs=16,
@@ -68,13 +69,14 @@ def main():
 
     # 4. Save
     sf.write(OUTPUT_FILE, wav, 44100)
-    
+
     time_used = end_time - start_time
     wav_duration = wav.shape[0] / 44100
     print(f"Output: {OUTPUT_FILE}")
     print(f"Duration: {wav_duration:.2f}s, Time: {time_used:.2f}s, RTF: {time_used/wav_duration:.4f}")
 
     server.stop()
+
 
 if __name__ == "__main__":
     main()

@@ -197,3 +197,6 @@ cython_debug/
 *.wav
 *.pt
 *.safetensors
+
+# do not commit uv.lock until pypi mirror is supported by uv
+uv.lock

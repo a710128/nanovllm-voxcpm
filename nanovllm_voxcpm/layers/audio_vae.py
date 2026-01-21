@@ -345,7 +345,6 @@ class AudioVAE(nn.Module):
         """
         return self.decoder(z)
 
-
     @torch.inference_mode()
     def encode(self, audio_data: torch.Tensor, sample_rate: int):
         """

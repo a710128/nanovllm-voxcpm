@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
+
 class RopeScalingConfig(BaseModel):
     type: str
     long_factor: List[float]
@@ -50,7 +51,8 @@ class VoxCPMDitConfig(BaseModel):
     kv_channels: int = None
 
     cfm_config: CfmConfig
-    
+
+
 class AudioVAEConfig(BaseModel):
     encoder_dim: int = 128
     encoder_rates: List[int] = [2, 5, 8, 8]
@@ -64,7 +66,7 @@ class AudioVAEConfig(BaseModel):
 
 class LoRAConfig(BaseModel):
     """LoRA configuration for VoxCPM inference.
-    
+
     Attributes:
         enable_lm: Apply LoRA to base_lm and residual_lm
         enable_dit: Apply LoRA to VoxCPMLocDiT (feat_decoder.estimator)
@@ -75,6 +77,7 @@ class LoRAConfig(BaseModel):
         target_modules_dit: Target modules in DiT layers
         target_proj_modules: Projection layer names to apply LoRA
     """
+
     enable_lm: bool = True
     enable_dit: bool = True
     enable_proj: bool = False
@@ -82,7 +85,11 @@ class LoRAConfig(BaseModel):
     alpha: float = 16.0
     target_modules_lm: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
     target_modules_dit: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
-    target_proj_modules: List[str] = ["enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj"]
+    target_proj_modules: List[str] = [
+        "enc_to_lm_proj",
+        "lm_to_dit_proj",
+        "res_to_dit_proj",
+    ]
 
 
 class VoxCPMConfig(BaseModel):
