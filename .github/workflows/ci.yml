@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          activate-environment: true
+
+      # The project declares GPU-centric dependencies (e.g. flash-attn). Unit tests
+      # include shims so we can run a CPU-only import/test pass in CI.
+      - name: Install project (no deps)
+        run: uv pip install -e . --no-deps
+
+      - name: Install test deps
+        run: uv pip install -U pytest pytest-cov black ruff mypy
+
+      - name: Install CPU torch (best effort)
+        run: |
+          uv pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4.0" || true
+
+      - name: Syntax check
+        run: uv run python -m compileall nanovllm_voxcpm deployment tests
+
+      - name: Lint (ruff)
+        # Keep the initial CI gate focused on real defects (syntax/undefined names).
+        run: uv run ruff check . --select F,E9
+
+      - name: Format (black)
+        run: uv run black --check .
+
+      - name: Type check (mypy)
+        # CI is CPU-only; many GPU/optional deps don't ship stubs.
+        run: uv run mypy nanovllm_voxcpm deployment --ignore-missing-imports
+
+      - name: Run tests
+        run: uv run pytest -q
