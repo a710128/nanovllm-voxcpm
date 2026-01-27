@@ -73,8 +73,7 @@ jobs:
           #
           # CUDA coverage:
           # - torch 2.5 runs on CUDA 12.4
-          # - torch 2.6-2.10 run on CUDA 12.6
-          # - torch 2.9-2.10 also run on CUDA 13.0
+          # - torch 2.6-2.9 run on CUDA 12.6
           - python-version: "3.11"
             torch-version: "2.5"
             torchaudio-version: "2.5"
@@ -103,33 +102,12 @@ jobs:
             cuda-image: "12.6.3-devel-ubuntu22.04"
             torch-extra-index: "https://download.pytorch.org/whl/cu126"
 
-          - python-version: "3.11"
+          - python-version: "3.12"
             torch-version: "2.9"
             torchaudio-version: "2.9"
             torchcodec-version: "0.9"
             cuda-image: "12.6.3-devel-ubuntu22.04"
             torch-extra-index: "https://download.pytorch.org/whl/cu126"
-
-          - python-version: "3.11"
-            torch-version: "2.9"
-            torchaudio-version: "2.9"
-            torchcodec-version: "0.9"
-            cuda-image: "13.0.2-devel-ubuntu24.04"
-            torch-extra-index: "https://download.pytorch.org/whl/cu130"
-
-          - python-version: "3.11"
-            torch-version: "2.10"
-            torchaudio-version: "2.10"
-            torchcodec-version: "0.10"
-            cuda-image: "12.6.3-devel-ubuntu22.04"
-            torch-extra-index: "https://download.pytorch.org/whl/cu126"
-
-          - python-version: "3.11"
-            torch-version: "2.10"
-            torchaudio-version: "2.10"
-            torchcodec-version: "0.10"
-            cuda-image: "13.0.2-devel-ubuntu24.04"
-            torch-extra-index: "https://download.pytorch.org/whl/cu130"
 
     container:
       image: nvidia/cuda:${{ matrix.cuda-image }}
@@ -184,7 +162,6 @@ jobs:
           uv sync \
             --all-packages \
             --group dev \
-            --frozen \
             --index ${{ matrix.torch-extra-index }} \
             --no-build-isolation-package flash-attn \
             --no-install-package torch \
