@@ -7,7 +7,6 @@ name = "nano-vllm-voxcpm"
 version = "1.0.0"
 authors = [{ name = "Guoyang Zeng" }]
 classifiers = ["License :: OSI Approved :: MIT License"]
-license-files = ["LICENSE"]
 readme = "README.md"
 description = "VoxCPM inference engine based on Nano-vLLM"
 requires-python = ">=3.10,<3.13"
@@ -27,6 +26,9 @@ dependencies = [
 
 [project.urls]
 Homepage="https://github.com/a710128/nanovllm-voxcpm"
+
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["."]
