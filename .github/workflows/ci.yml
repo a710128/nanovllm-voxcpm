@@ -37,7 +37,7 @@ jobs:
           uv pip install \
             --index-url https://pypi.org/simple \
             --extra-index-url https://download.pytorch.org/whl/cpu \
-            "torch!=2.6.*,>=2.4.0" || true
+            "torch!=2.6.*,>=2.5.0" || true
 
       - name: Syntax check
         # Keep lint on `uv run`, but avoid syncing GPU deps (e.g. flash-attn).
@@ -72,17 +72,9 @@ jobs:
           # We keep Python at 3.11 here to minimize wheel-matrix variance.
           #
           # CUDA coverage:
-          # - torch 2.4 runs on CUDA 12.4
           # - torch 2.5 runs on CUDA 12.4
           # - torch 2.7-2.9 run on CUDA 12.6
           # - torch 2.9-2.10 run on CUDA 13.0
-          - python-version: "3.11"
-            torch-version: "2.4"
-            torchaudio-version: "2.4"
-            torchcodec-version: "0.0.3"
-            cuda-image: "12.4.1-devel-ubuntu20.04"
-            torch-extra-index: "https://download.pytorch.org/whl/cu124"
-
           - python-version: "3.11"
             torch-version: "2.5"
             torchaudio-version: "2.5"
@@ -167,7 +159,6 @@ jobs:
         # This updates pyproject.toml and generates/updates uv.lock within the CI workspace.
         run: |
           uv add --no-sync \
-            --index-strategy unsafe-best-match \
             --index ${{ matrix.torch-extra-index }} \
             --default-index https://pypi.org/simple \
             "torch==${{ matrix.torch-version }}" \
@@ -184,7 +175,6 @@ jobs:
           uv sync \
             --all-packages \
             --group dev \
-            --index-strategy unsafe-best-match \
             --index ${{ matrix.torch-extra-index }} \
             --default-index https://pypi.org/simple
 
