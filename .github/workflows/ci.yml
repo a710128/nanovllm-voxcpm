@@ -143,13 +143,15 @@ jobs:
             pkg-config
           rm -rf /var/lib/apt/lists/*
 
-      - name: Install PyTorch (CUDA wheels)
+      - name: Pin torch stack (uv add)
+        # Override torch/torchaudio/torchcodec versions for this matrix entry.
+        # This updates pyproject.toml and generates/updates uv.lock within the CI workspace.
         run: |
-          uv pip install \
-            --index-url ${{ matrix.torch-extra-index }} \
-            --extra-index-url https://pypi.org/simple \
-            torch==${{ matrix.torch-version }} \
-            torchaudio==${{ matrix.torchaudio-version }} \
+          uv add --no-sync \
+            --index ${{ matrix.torch-extra-index }} \
+            --default-index https://pypi.org/simple \
+            "torch==${{ matrix.torch-version }}" \
+            "torchaudio==${{ matrix.torchaudio-version }}" \
             "torchcodec==${{ matrix.torchcodec-version }}"
 
       - name: Install flash-attn build deps
@@ -157,16 +159,13 @@ jobs:
         run: uv pip install -U setuptools wheel psutil
 
       - name: Sync workspace deps
-        # Install remaining deps from the lockfile without touching torch/torchaudio/torchcodec.
+        # Install all workspace deps based on the (possibly updated) lockfile.
         run: |
           uv sync \
             --all-packages \
             --group dev \
             --index ${{ matrix.torch-extra-index }} \
-            --no-build-isolation-package flash-attn \
-            --no-install-package torch \
-            --no-install-package torchaudio \
-            --no-install-package torchcodec
+            --default-index https://pypi.org/simple
 
       - name: Run tests
         run: uv run --no-sync pytest -q
