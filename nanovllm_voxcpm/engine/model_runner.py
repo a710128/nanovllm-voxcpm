@@ -288,27 +288,26 @@ class BaseModelRunner:
         method = getattr(self, method_name, None)
         return method(*args)
 
-    def prepare_block_tables(self, seqs: list[RunnerTask]):
+    def prepare_block_tables(self, seqs: list[RunnerTask]) -> torch.Tensor:
         max_len = max(len(seq.block_table) for seq in seqs)
-        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
-        block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        return block_tables
+        block_tables_list: list[list[int]] = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
+        return torch.tensor(block_tables_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
 
     def prepare_prefill_context(self, seqs: list[RunnerTask]):
-        positions = []
-        cu_seqlens_q = [0]
-        cu_seqlens_k = [0]
+        positions_list: list[int] = []
+        cu_seqlens_q_list: list[int] = [0]
+        cu_seqlens_k_list: list[int] = [0]
         max_seqlen_q = 0
         max_seqlen_k = 0
-        slot_mapping = []
-        block_tables = None
+        slot_mapping_list: list[int] = []
+        block_tables: torch.Tensor | None = None
         for seq in seqs:
             seq_len = seq.seq_length
-            positions.extend(list(range(seq.num_cached_tokens, seq_len)))
+            positions_list.extend(list(range(seq.num_cached_tokens, seq_len)))
             seqlen_q = seq_len - seq.num_cached_tokens
             seqlen_k = seq_len
-            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
-            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+            cu_seqlens_q_list.append(cu_seqlens_q_list[-1] + seqlen_q)
+            cu_seqlens_k_list.append(cu_seqlens_k_list[-1] + seqlen_k)
             max_seqlen_q = max(seqlen_q, max_seqlen_q)
             max_seqlen_k = max(seqlen_k, max_seqlen_k)
             if not seq.block_table:  # warmup
@@ -319,14 +318,14 @@ class BaseModelRunner:
                     end = start + self.block_size
                 else:
                     end = start + seq.last_block_num_tokens
-                slot_mapping.extend(list(range(start, end)))
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:  # prefix cache
+                slot_mapping_list.extend(list(range(start, end)))
+        if cu_seqlens_k_list[-1] > cu_seqlens_q_list[-1]:  # prefix cache
             block_tables = self.prepare_block_tables(seqs)
 
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions_list, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_q = torch.tensor(cu_seqlens_q_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k = torch.tensor(cu_seqlens_k_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         set_context(
             True,
             cu_seqlens_q,
@@ -340,16 +339,16 @@ class BaseModelRunner:
         return positions
 
     def prepare_decode_context(self, seqs: list[RunnerTask]):
-        positions = []
-        slot_mapping = []
-        context_lens = []
+        positions_list: list[int] = []
+        slot_mapping_list: list[int] = []
+        context_lens_list: list[int] = []
         for seq in seqs:
-            positions.append(seq.seq_length - 1)
-            context_lens.append(seq.seq_length)
-            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+            positions_list.append(seq.seq_length - 1)
+            context_lens_list.append(seq.seq_length)
+            slot_mapping_list.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens - 1)
+        positions = torch.tensor(positions_list, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens_list, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
         set_context(
             False,

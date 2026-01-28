@@ -66,15 +66,12 @@ ignore_missing_imports = true
 no_implicit_optional = false
 exclude = "^(tests/|deployment/|benchmark/|example.*\\.py$)"
 
-show_error_codes = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
 module = [
     "nanovllm_voxcpm.layers.*",
     "nanovllm_voxcpm.models.voxcpm.*",
-    "nanovllm_voxcpm.engine.model_runner",
-    "nanovllm_voxcpm.engine.sequence",
 ]
 ignore_errors = true
 
