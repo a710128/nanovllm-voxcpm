@@ -216,9 +216,9 @@ class BaseModelRunner:
 
     def allocate_kv_cache(self):
         free, total = torch.cuda.mem_get_info()
-        used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+        reserved = torch.cuda.memory_reserved()
 
         total_attention_block_size = 0
         for module in self.model.modules():
@@ -227,9 +227,10 @@ class BaseModelRunner:
                     2 * self.block_size * module.num_kv_heads * module.head_dim * self.dtype.itemsize
                 )
 
-        self._config.num_kvcache_blocks = (
-            int(total * self._config.gpu_memory_utilization - used - peak + current) // total_attention_block_size
-        )
+        available_budget = total * self._config.gpu_memory_utilization - peak
+        available_physical = free + (reserved - current) - (peak - current)
+        available_for_kv = min(available_budget, available_physical)
+        self._config.num_kvcache_blocks = int(available_for_kv) // total_attention_block_size
         assert self._config.num_kvcache_blocks > 0
 
         for module in self.model.modules():
