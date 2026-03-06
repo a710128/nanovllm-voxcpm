@@ -18,6 +18,8 @@ def main():
         devices=[0],
     )
     print("Ready")
+    model_info = server.get_model_info()
+    sample_rate = int(model_info["sample_rate"])
 
     buf = []
     start_time = time.time()
@@ -32,8 +34,8 @@ def main():
     end_time = time.time()
 
     time_used = end_time - start_time
-    wav_duration = wav.shape[0] / 44100
-    sf.write("test.wav", wav, 44100)
+    wav_duration = wav.shape[0] / sample_rate
+    sf.write("test.wav", wav, sample_rate)
 
     print(f"Time: {end_time - start_time}s")
     print(f"RTF: {time_used / wav_duration}")

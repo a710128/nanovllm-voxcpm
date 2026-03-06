@@ -20,4 +20,6 @@ dist
 # Editors / OS
 .DS_Store
 
-deployment/Dockerfile
+/deployment/Dockerfile
+
+/models

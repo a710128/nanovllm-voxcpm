@@ -54,6 +54,6 @@ async def encode_latents(
     return EncodeLatentsResponse(
         prompt_latents_base64=base64.b64encode(latents).decode("utf-8"),
         feat_dim=int(model_info["feat_dim"]),
-        sample_rate=int(model_info["sample_rate"]),
+        sample_rate=int(model_info.get("encoder_sample_rate", model_info["sample_rate"])),
         channels=int(model_info["channels"]),
     )

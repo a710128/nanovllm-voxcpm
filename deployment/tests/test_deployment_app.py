@@ -30,7 +30,9 @@ class FakeServerPool:
 
     async def get_model_info(self):
         return {
-            "sample_rate": 16000,
+            "sample_rate": 48000,
+            "encoder_sample_rate": 16000,
+            "output_sample_rate": 48000,
             "channels": 1,
             "feat_dim": 64,
             "patch_size": 2,
@@ -89,7 +91,7 @@ def test_info(app):
         r = client.get("/info")
         assert r.status_code == 200
         body = r.json()
-        assert body["model"]["sample_rate"] == 16000
+        assert body["model"]["sample_rate"] == 48000
         assert body["model"]["channels"] == 1
 
 

@@ -18,6 +18,7 @@ dependencies = [
     "torchaudio",
     "tqdm",
     "numpy",
+    "librosa",
     "pydantic",
     "flash-attn",
     "soundfile>=0.13.1",
