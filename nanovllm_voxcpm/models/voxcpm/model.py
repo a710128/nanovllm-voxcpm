@@ -173,7 +173,6 @@ def get_cpm4_rope(
 
 
 class Cpm4Attention(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -327,7 +326,6 @@ class Cpm4Attention(nn.Module):
 
 
 class Cpm4MLP(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -390,7 +388,6 @@ class Cpm4MLP(nn.Module):
 
 
 class Cpm4DecoderLayer(nn.Module):
-
     def __init__(
         self,
         config: MiniCPM4Config,
@@ -406,7 +403,7 @@ class Cpm4DecoderLayer(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             is_causal=is_causal,
             qkv_bias=getattr(config, "attention_bias", False),
-            head_dim=getattr(config, "head_dim", None),
+            head_dim=getattr(config, "kv_channels", None),
             rope_theta=getattr(config, "rope_theta", 10000),
             rope_scaling=getattr(config, "rope_scaling", None),
             apply_qk_norm=getattr(config, "apply_qk_norm", False),
@@ -444,7 +441,6 @@ class Cpm4DecoderLayer(nn.Module):
 
 
 class Cpm4Model(nn.Module):
-
     def __init__(
         self,
         config: MiniCPM4Config,

@@ -241,7 +241,7 @@ class Cpm4DecoderLayer(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             is_causal=is_causal,
             qkv_bias=getattr(config, "attention_bias", False),
-            head_dim=getattr(config, "head_dim", None),
+            head_dim=getattr(config, "kv_channels", None),
             rope_theta=getattr(config, "rope_theta", 10000),
             rope_scaling=getattr(config, "rope_scaling", None),
             apply_qk_norm=getattr(config, "apply_qk_norm", False),
@@ -572,11 +572,9 @@ class VoxCPM2Model(nn.Module):
         else:
             lm_hidden = enc_outputs
 
-        residual_inputs = self.fusion_concat_proj(torch.cat([enc_outputs, torch.where(
-            feat_mask.unsqueeze(-1),
-            feat_embeds,
-            0
-        )], dim=-1))
+        residual_inputs = self.fusion_concat_proj(
+            torch.cat([enc_outputs, torch.where(feat_mask.unsqueeze(-1), feat_embeds, 0)], dim=-1)
+        )
         ralm_outputs = self.residual_lm(residual_inputs, positions)
         if context.is_prefill:
             last_indices = context.cu_seqlens_q[1:] - 1
