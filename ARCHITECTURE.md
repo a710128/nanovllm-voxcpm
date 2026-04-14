@@ -306,20 +306,12 @@ Files:
 
 - `nanovllm_voxcpm/models/voxcpm/config.py` (LoRAConfig)
 - `nanovllm_voxcpm/layers/lora.py` (LoRA modules)
-- `nanovllm_voxcpm/utils/loader.py` (load_lora_weights)
-- `nanovllm_voxcpm/models/voxcpm/server.py` (server APIs)
 
 LoRA is implemented with:
 
 - fused LoRA input projections where possible (to reduce matmuls)
-- enable/disable via a scaling buffer (`lora_scaling`) so CUDA graphs can remain valid
+- fixed slot-major weights and runtime slot metadata so CUDA graphs can remain valid
 - name mapping when loading external LoRA checkpoints because this repo uses fused projections internally
-
-Server-side API surface:
-
-- `set_lora_enabled(enabled: bool)`
-- `load_lora(lora_path: str)`
-- `reset_lora()`
 
 ## Data Flow Walkthrough (What Happens on One Step)
 

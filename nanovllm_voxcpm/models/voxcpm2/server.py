@@ -6,7 +6,7 @@ import time
 import traceback
 import uuid
 from queue import Empty
-from typing import Any, AsyncGenerator, List, Optional, cast
+from typing import Any, AsyncGenerator, List, Optional
 
 import librosa
 import numpy as np
@@ -19,27 +19,11 @@ from nanovllm_voxcpm.config import Config
 from nanovllm_voxcpm.models.voxcpm2.config import LoRAConfig, VoxCPM2Config
 from nanovllm_voxcpm.models.voxcpm2.engine import VoxCPM2Engine
 from nanovllm_voxcpm.models.voxcpm2.runner import VoxCPM2Runner
-from nanovllm_voxcpm.utils.loader import load_lora_weights
 
 Waveform = NDArray[np.float32]
 
 
 class HealthResponse(TypedDict):
-    status: Literal["ok"]
-
-
-class SetLoraEnabledResponse(TypedDict):
-    status: Literal["ok"]
-    lora_enabled: bool
-
-
-class LoadLoraResponse(TypedDict):
-    status: Literal["ok"]
-    loaded_keys: int
-    skipped_keys: int
-
-
-class ResetLoraResponse(TypedDict):
     status: Literal["ok"]
 
 
@@ -172,27 +156,6 @@ class VoxCPM2ServerImpl:
 
     def is_finished(self):
         return self.llm.is_finished()
-
-    def set_lora_enabled(self, enabled: bool) -> SetLoraEnabledResponse:
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model")
-        model = cast(VoxCPM2Runner, self.llm.model_runner).model
-        model.set_lora_enabled(enabled)
-        return SetLoraEnabledResponse(status="ok", lora_enabled=enabled)
-
-    def load_lora(self, lora_path: str) -> LoadLoraResponse:
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model. Initialize with lora_config.")
-        model = cast(VoxCPM2Runner, self.llm.model_runner).model
-        loaded, skipped = load_lora_weights(model, lora_path, device="cuda")
-        return LoadLoraResponse(status="ok", loaded_keys=len(loaded), skipped_keys=len(skipped))
-
-    def reset_lora(self) -> ResetLoraResponse:
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model")
-        model = cast(VoxCPM2Runner, self.llm.model_runner).model
-        model.reset_lora_parameters()
-        return ResetLoraResponse(status="ok")
 
 
 def main_loop(queue_in: mp.Queue, queue_out: mp.Queue, args, kwargs):
@@ -433,15 +396,6 @@ class AsyncVoxCPM2Server:
                 await self.submit("cancel", seq_id)
             del self.stream_table[seq_id]
 
-    async def set_lora_enabled(self, enabled: bool) -> SetLoraEnabledResponse:
-        return await self.submit("set_lora_enabled", enabled)
-
-    async def load_lora(self, lora_path: str) -> LoadLoraResponse:
-        return await self.submit("load_lora", lora_path)
-
-    async def reset_lora(self) -> ResetLoraResponse:
-        return await self.submit("reset_lora")
-
 
 class AsyncVoxCPM2ServerPool:
     def __init__(
@@ -539,18 +493,6 @@ class AsyncVoxCPM2ServerPool:
         finally:
             self.servers_load[min_load_server_idx] -= 1
 
-    async def set_lora_enabled(self, enabled: bool):
-        results = await asyncio.gather(*[server.set_lora_enabled(enabled) for server in self.servers])
-        return results[0]
-
-    async def load_lora(self, lora_path: str):
-        results = await asyncio.gather(*[server.load_lora(lora_path) for server in self.servers])
-        return results[0]
-
-    async def reset_lora(self):
-        results = await asyncio.gather(*[server.reset_lora() for server in self.servers])
-        return results[0]
-
 
 class SyncVoxCPM2ServerPool:
     def __init__(
@@ -633,15 +575,3 @@ class SyncVoxCPM2ServerPool:
                 yield self.loop.run_until_complete(async_gen.__anext__())
         except StopAsyncIteration:
             return
-
-    def set_lora_enabled(self, enabled: bool):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.set_lora_enabled(enabled))
-
-    def load_lora(self, lora_path: str):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.load_lora(lora_path))
-
-    def reset_lora(self):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.reset_lora())

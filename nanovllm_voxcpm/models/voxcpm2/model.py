@@ -15,10 +15,6 @@ from nanovllm_voxcpm.layers.lora import (
     LoRAMergedColumnParallelLinear,
     LoRAQKVParallelLinear,
     LoRARowParallelLinear,
-    get_lora_state_dict,
-    iter_lora_modules,
-    reset_all_lora_parameters,
-    set_all_lora_enabled,
 )
 from nanovllm_voxcpm.models.voxcpm2.config import CfmConfig, LoRAConfig, MiniCPM4Config, VoxCPM2Config
 from nanovllm_voxcpm.utils.context import get_context
@@ -132,6 +128,8 @@ class Cpm4Attention(nn.Module):
 
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
+        max_loras = lora_config.max_loras if lora_config else 1
+        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
         lora_targets = lora_config.target_modules_lm if lora_config else []
         qkv_lora_targets = [t.replace("_proj", "") for t in lora_targets if t in ["q_proj", "k_proj", "v_proj"]]
         if lora_r > 0 and qkv_lora_targets:
@@ -144,6 +142,8 @@ class Cpm4Attention(nn.Module):
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
                 lora_targets=qkv_lora_targets,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.qkv_proj = QKVParallelLinear(
@@ -161,6 +161,8 @@ class Cpm4Attention(nn.Module):
                 bias=qkv_bias,
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.o_proj = RowParallelLinear(self.total_num_heads * self.head_dim, hidden_size, bias=qkv_bias)
@@ -209,6 +211,8 @@ class Cpm4MLP(nn.Module):
         super().__init__()
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
+        max_loras = lora_config.max_loras if lora_config else 1
+        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
         lora_targets = lora_config.target_modules_lm if lora_config else []
         gate_up_lora_targets = []
         if "gate_proj" in lora_targets:
@@ -223,11 +227,21 @@ class Cpm4MLP(nn.Module):
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
                 lora_targets=gate_up_lora_targets,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.gate_up_proj = MergedColumnParallelLinear(hidden_size, [intermediate_size] * 2, bias=False)
         self.down_proj = (
-            LoRARowParallelLinear(intermediate_size, hidden_size, bias=False, lora_r=lora_r, lora_alpha=lora_alpha)
+            LoRARowParallelLinear(
+                intermediate_size,
+                hidden_size,
+                bias=False,
+                lora_r=lora_r,
+                lora_alpha=lora_alpha,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
+            )
             if lora_r > 0 and "down_proj" in lora_targets
             else RowParallelLinear(intermediate_size, hidden_size, bias=False)
         )
@@ -349,6 +363,8 @@ class VoxCPM2LocDiT(nn.Module):
                 enable_dit=False,
                 r=lora_config.r,
                 alpha=lora_config.alpha,
+                max_loras=lora_config.max_loras,
+                max_lora_rank=lora_config.max_lora_rank,
                 target_modules_lm=lora_config.target_modules_dit,
                 target_modules_dit=[],
                 target_proj_modules=[],
@@ -528,6 +544,8 @@ class VoxCPM2Model(nn.Module):
 
         proj_lora_r = lora_config.r if (lora_config and lora_config.enable_proj) else 0
         proj_lora_alpha = lora_config.alpha if lora_config else 16.0
+        proj_max_loras = lora_config.max_loras if lora_config else 1
+        proj_max_lora_rank = lora_config.max_lora_rank if lora_config else proj_lora_r
         proj_targets = lora_config.target_proj_modules if lora_config else []
         self.enc_to_lm_proj = (
             LoRALinear(
@@ -535,6 +553,8 @@ class VoxCPM2Model(nn.Module):
                 config.lm_config.hidden_size,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
             if proj_lora_r > 0 and "enc_to_lm_proj" in proj_targets
             else nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
@@ -545,6 +565,8 @@ class VoxCPM2Model(nn.Module):
                 config.dit_config.hidden_dim,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
             if proj_lora_r > 0 and "lm_to_dit_proj" in proj_targets
             else nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -555,6 +577,8 @@ class VoxCPM2Model(nn.Module):
                 config.dit_config.hidden_dim,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
             if proj_lora_r > 0 and "res_to_dit_proj" in proj_targets
             else nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -565,6 +589,8 @@ class VoxCPM2Model(nn.Module):
                 config.lm_config.hidden_size,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
             if proj_lora_r > 0 and "fusion_concat_proj" in proj_targets
             else nn.Linear(config.lm_config.hidden_size * 2, config.lm_config.hidden_size)
@@ -618,15 +644,3 @@ class VoxCPM2Model(nn.Module):
         ).transpose(1, 2)
         stop_flag = self.stop_head(self.stop_actn(self.stop_proj(lm_hidden))).argmax(dim=-1)
         return {"latents": pred_feat, "stop_flag": stop_flag}
-
-    def set_lora_enabled(self, enabled: bool):
-        set_all_lora_enabled(self, enabled)
-
-    def reset_lora_parameters(self):
-        reset_all_lora_parameters(self)
-
-    def get_lora_state_dict(self) -> dict:
-        return get_lora_state_dict(self)
-
-    def iter_lora_modules(self):
-        return iter_lora_modules(self)

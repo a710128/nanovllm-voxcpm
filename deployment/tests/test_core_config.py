@@ -107,12 +107,11 @@ def test_load_config_validates_serverpool(monkeypatch):
         load_config()
 
 
-def test_load_config_requires_lora_id_when_uri_set(monkeypatch):
+def test_load_config_rejects_legacy_lora_startup_env(monkeypatch):
     from app.core.config import load_config
 
     monkeypatch.setenv("NANOVLLM_LORA_URI", "file:///tmp/lora")
-    monkeypatch.delenv("NANOVLLM_LORA_ID", raising=False)
-    with pytest.raises(RuntimeError, match="NANOVLLM_LORA_ID is required"):
+    with pytest.raises(RuntimeError, match="LoRA startup preload env vars were removed"):
         load_config()
 
 
@@ -120,7 +119,5 @@ def test_load_config_expands_user_paths(monkeypatch):
     from app.core.config import load_config
 
     monkeypatch.setenv("NANOVLLM_MODEL_PATH", "~/VoxCPM1.5")
-    monkeypatch.setenv("NANOVLLM_CACHE_DIR", "~/.cache/nanovllm")
     cfg = load_config()
     assert cfg.model_path == os.path.expanduser("~/VoxCPM1.5")
-    assert cfg.lora.cache_dir == os.path.expanduser("~/.cache/nanovllm")

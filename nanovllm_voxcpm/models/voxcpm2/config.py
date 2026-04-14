@@ -77,9 +77,11 @@ class LoRAConfig(BaseModel):
         enable_lm: Apply LoRA to base_lm and residual_lm
         enable_dit: Apply LoRA to VoxCPMLocDiT (feat_decoder.estimator)
         enable_proj: Apply LoRA to projection Linear layers
-        r: LoRA rank (low-rank dimension)
-        alpha: LoRA scaling factor (scaling = alpha / r)
-        target_modules_lm: Target modules in LM layers (e.g., ["q_proj", "k_proj", "v_proj", "o_proj"])
+    r: LoRA rank (low-rank dimension)
+    alpha: LoRA scaling factor (scaling = alpha / r)
+    max_loras: Maximum concurrently resident LoRAs per layer
+    max_lora_rank: Maximum supported LoRA rank per layer slot
+    target_modules_lm: Target modules in LM layers (e.g., ["q_proj", "k_proj", "v_proj", "o_proj"])
         target_modules_dit: Target modules in DiT layers
         target_proj_modules: Projection layer names to apply LoRA
     """
@@ -89,6 +91,8 @@ class LoRAConfig(BaseModel):
     enable_proj: bool = False
     r: int = 32
     alpha: float = 16.0
+    max_loras: int = 1
+    max_lora_rank: int = 32
     target_modules_lm: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
     target_modules_dit: List[str] = ["q_proj", "k_proj", "v_proj", "o_proj"]
     target_proj_modules: List[str] = [

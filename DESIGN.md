@@ -544,21 +544,22 @@ GPU 缓存池是固定大小的 slot pool。每个 slot 至少包含：
 
 - 新增类似 `torch.cuda.is_available()` 的可用性接口：`lora.is_available()`。
 - `lora.is_available()` 用于快速检查当前运行时是否支持 LoRA 推理。
-- 只有当 Punica kernel 与 LoRA 运行时依赖均可用时，`lora.is_available()` 才返回 `True`。
+- 只有当仓库内 vendored Triton LoRA ops 与 LoRA 运行时依赖均可用时，`lora.is_available()` 才返回 `True`。
 - 若 `lora.is_available()` 返回 `False`：
   - 系统仍可运行 base model
   - 但不允许注册任何 LoRA
 - `register_lora(name, path)` 必须再次强校验 `lora.is_available()`；若不可用则直接报错。
 
-### Punica Requirement
+### LoRA Backend Requirement
 
-- Punica kernel 是 LoRA 推理的硬依赖。
-- 不提供非 Punica 的 LoRA fallback 实现。
-- 若运行时缺少 Punica kernel，则 LoRA 功能整体不可用。
+- 仓库内 vendored Triton LoRA ops 是唯一 LoRA backend，也是本仓库所说的 Punica 实现。
+- 不区分也不优先使用外部 Punica package/backend。
+- 不提供其他 LoRA backend 或 fallback 实现。
+- 若运行时缺少这套 vendored Triton LoRA ops 或其依赖，则 LoRA 功能整体不可用。
 
 ### Kernel Computation Model
 
-- LoRA 推理采用 vLLM / Punica 风格的 `slot + mapping + shrink/expand` 方案。
+- LoRA 推理采用 vLLM / Punica 风格的 `slot + mapping + shrink/expand` 方案，由仓库内 vendored Triton LoRA ops 提供。
 - base matmul 只执行一次。
 - LoRA 增量通过两阶段 kernel 完成：
   - `shrink`: `tmp = x @ A^T`
@@ -647,7 +648,7 @@ LoRA 子系统必须对 CUDA Graph 友好，满足以下硬要求：
 ### Final Principle
 
 - `lora.is_available()` 是 LoRA 能力总开关。
-- Punica kernel 是 LoRA 的硬依赖。
+- 仓库内 vendored Triton LoRA ops 是 LoRA 的唯一 backend，也是本仓库的 Punica 实现。
 - mixed batch 靠 mapping 实现，不靠拆 batch。
 - base 路径只计算一次。
 - LoRA 只做低秩增量计算。

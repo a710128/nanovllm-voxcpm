@@ -2,22 +2,23 @@
 
 本文件只记录开发实施计划；设计原则与架构决策见 `DESIGN.md`。
 
-## Phase 1: Punica Kernel 与新 LoRA Layer 基座
+## Phase 1: Vendored Triton LoRA Ops 与新 LoRA Layer 基座
 
 目标：先把 LoRA 的 CUDA 执行基座做对，确保后续运行时与调度都建立在稳定的 kernel 语义之上。
 
 ### 1.1 引入 LoRA 可用性检查
 
 - 新增 `lora.is_available()` 能力检查接口。
-- 检查 Punica kernel 及其运行时依赖是否可用。
+- 检查仓库内 vendored Triton LoRA ops 及其运行时依赖是否可用。
 - 明确：若 `lora.is_available() == False`，则系统只能跑 base model，不能注册 LoRA。
 - 在注册 LoRA 的代码路径中强制复用该检查。
 
-### 1.2 接入 Punica kernel 依赖
+### 1.2 接入 vendored Triton LoRA ops
 
-- 在仓库内建立 LoRA kernel 适配层，明确 Punica 为唯一 LoRA kernel 后端。
+- 在仓库内建立 LoRA kernel 适配层，明确 vendored Triton LoRA ops 为唯一 LoRA 后端。
+- 文档与实现中将该仓库内实现视为本仓库的 Punica 实现，不再区分外部 Punica backend。
 - 统一处理缺失依赖、导入失败、初始化失败的报错路径。
-- 不提供非 Punica 的 LoRA fallback。
+- 不提供其他 LoRA backend 或 fallback。
 
 ### 1.3 重构现有 LoRA layer
 
@@ -28,7 +29,7 @@
   - `effective_rank`
   - per-slot `scaling`
 - 保持 base path 只执行一次。
-- LoRA path 改为 Punica 风格的 `shrink + expand` 增量计算。
+- LoRA path 改为 Punica 风格的 `shrink + expand` 增量计算，由 vendored Triton LoRA ops 执行。
 - 对 fused projection（如 QKV、gate_up）保留 packed/slice 友好的结构。
 - 新 LoRA layer 必须同时支持 `tensor_parallel_size > 1`。
 - TP 下 LoRA 的张量分片与通信语义必须严格继承 base layer 当前实现。
@@ -218,5 +219,5 @@
 ## Recommended Execution Order
 
 - 先完成 Phase 1，再进入 Phase 2，最后做 Phase 3。
-- 不建议在 Punica kernel 与 CUDA Graph 约束未稳定前，提前改 public API 或模型层调用路径。
+- 不建议在 vendored Triton LoRA ops 与 CUDA Graph 约束未稳定前，提前改 public API 或模型层调用路径。
 - 不建议在 `LoRA Manager` 与调度协作未完成前，提前做端到端接口联调。

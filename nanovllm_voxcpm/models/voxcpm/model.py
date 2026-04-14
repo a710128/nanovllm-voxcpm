@@ -16,10 +16,6 @@ from nanovllm_voxcpm.layers.lora import (
     LoRAMergedColumnParallelLinear,
     LoRARowParallelLinear,
     LoRALinear,
-    iter_lora_modules,
-    set_all_lora_enabled,
-    reset_all_lora_parameters,
-    get_lora_state_dict,
 )
 from nanovllm_voxcpm.layers.embed_head import VocabParallelEmbedding
 import math
@@ -209,6 +205,8 @@ class Cpm4Attention(nn.Module):
         # Determine LoRA parameters for attention projections
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
+        max_loras = lora_config.max_loras if lora_config else 1
+        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
         lora_targets = lora_config.target_modules_lm if lora_config else []
 
         # QKV projection with optional LoRA
@@ -223,6 +221,8 @@ class Cpm4Attention(nn.Module):
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
                 lora_targets=qkv_lora_targets,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.qkv_proj = QKVParallelLinear(
@@ -241,6 +241,8 @@ class Cpm4Attention(nn.Module):
                 bias=qkv_bias,
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.o_proj = RowParallelLinear(
@@ -337,6 +339,8 @@ class Cpm4MLP(nn.Module):
         # Determine LoRA parameters for MLP projections
         lora_r = lora_config.r if lora_config else 0
         lora_alpha = lora_config.alpha if lora_config else 16.0
+        max_loras = lora_config.max_loras if lora_config else 1
+        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
         lora_targets = lora_config.target_modules_lm if lora_config else []
 
         # gate_up_proj with optional LoRA
@@ -354,6 +358,8 @@ class Cpm4MLP(nn.Module):
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
                 lora_targets=gate_up_lora_targets,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.gate_up_proj = MergedColumnParallelLinear(
@@ -370,6 +376,8 @@ class Cpm4MLP(nn.Module):
                 bias=False,
                 lora_r=lora_r,
                 lora_alpha=lora_alpha,
+                max_loras=max_loras,
+                max_lora_rank=max_lora_rank,
             )
         else:
             self.down_proj = RowParallelLinear(
@@ -555,6 +563,8 @@ class VoxCPMLocDiT(nn.Module):
                 enable_dit=False,
                 r=lora_config.r,
                 alpha=lora_config.alpha,
+                max_loras=lora_config.max_loras,
+                max_lora_rank=lora_config.max_lora_rank,
                 target_modules_lm=lora_config.target_modules_dit,  # Use DiT targets
                 target_modules_dit=[],
             )
@@ -835,6 +845,8 @@ class VoxCPMModel(nn.Module):
         # Determine LoRA config for projection layers
         proj_lora_r = lora_config.r if (lora_config and lora_config.enable_proj) else 0
         proj_lora_alpha = lora_config.alpha if lora_config else 16.0
+        proj_max_loras = lora_config.max_loras if lora_config else 1
+        proj_max_lora_rank = lora_config.max_lora_rank if lora_config else proj_lora_r
         proj_targets = lora_config.target_proj_modules if lora_config else []
 
         # enc_to_lm_proj
@@ -844,6 +856,8 @@ class VoxCPMModel(nn.Module):
                 config.lm_config.hidden_size,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
         else:
             self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
@@ -855,6 +869,8 @@ class VoxCPMModel(nn.Module):
                 config.dit_config.hidden_dim,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
         else:
             self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -866,6 +882,8 @@ class VoxCPMModel(nn.Module):
                 config.dit_config.hidden_dim,
                 lora_r=proj_lora_r,
                 lora_alpha=proj_lora_alpha,
+                max_loras=proj_max_loras,
+                max_lora_rank=proj_max_lora_rank,
             )
         else:
             self.res_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -949,23 +967,3 @@ class VoxCPMModel(nn.Module):
             "latents": pred_feat,
             "stop_flag": stop_flag,
         }
-
-    # ------------------------------------------------------------------ #
-    # LoRA Management Methods
-    # ------------------------------------------------------------------ #
-
-    def set_lora_enabled(self, enabled: bool):
-        """Enable/disable all LoRA layers (without unloading weights)."""
-        set_all_lora_enabled(self, enabled)
-
-    def reset_lora_parameters(self):
-        """Reset all LoRA parameters to initial state (effectively unloading LoRA)."""
-        reset_all_lora_parameters(self)
-
-    def get_lora_state_dict(self) -> dict:
-        """Get all LoRA parameters (lora_A/lora_B)."""
-        return get_lora_state_dict(self)
-
-    def iter_lora_modules(self):
-        """Iterate over all LoRA modules in the model."""
-        return iter_lora_modules(self)

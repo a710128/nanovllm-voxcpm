@@ -109,7 +109,6 @@ class FakeServerPool:
 
     def __init__(self, *args, **kwargs):
         self._stopped = False
-        self._lora_loaded = False
 
     async def wait_for_ready(self):
         return None
@@ -147,12 +146,6 @@ class FakeServerPool:
 
         yield np.zeros((160,), dtype=np.float32)
         yield np.ones((160,), dtype=np.float32) * 0.5
-
-    async def load_lora(self, path: str):
-        self._lora_loaded = True
-
-    async def set_lora_enabled(self, enabled: bool):
-        return None
 
 
 @pytest.fixture

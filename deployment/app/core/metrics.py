@@ -65,16 +65,6 @@ ENCODE_LATENTS_DURATION_SECONDS = Histogram(
     "Latency of /encode_latents in seconds",
 )
 
-LORA_LOADED = Gauge(
-    "nanovllm_lora_loaded",
-    "Whether LoRA is loaded for this instance",
-    labelnames=["lora_id"],
-)
-LORA_LOAD_SECONDS = Histogram(
-    "nanovllm_lora_load_seconds",
-    "Time spent loading LoRA at startup (resolver+load)",
-)
-
 
 def install_metrics(app: FastAPI) -> None:
     @app.middleware("http")

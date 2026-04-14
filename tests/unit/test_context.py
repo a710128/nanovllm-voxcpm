@@ -4,7 +4,7 @@ torch = pytest.importorskip("torch")
 
 
 def test_context_set_get_reset():
-    from nanovllm_voxcpm.utils.context import get_context, set_context, reset_context
+    from nanovllm_voxcpm.utils.context import get_context, reset_context, set_context
 
     reset_context()
     ctx = get_context()
@@ -22,3 +22,29 @@ def test_context_set_get_reset():
     ctx = get_context()
     assert ctx.is_prefill is False
     assert ctx.cu_seqlens_q is None
+
+
+def test_lora_context_set_get_reset():
+    from nanovllm_voxcpm.utils.context import get_lora_context, reset_lora_context, set_lora_context
+
+    reset_lora_context()
+    ctx = get_lora_context()
+    assert ctx.no_lora_flag is True
+    assert ctx.token_to_slot is None
+
+    token_to_slot = torch.tensor([0, -1, 1], dtype=torch.int32)
+    active_slot_ids = torch.tensor([0, 1], dtype=torch.int32)
+    set_lora_context(
+        token_to_slot=token_to_slot,
+        active_slot_ids=active_slot_ids,
+        no_lora_flag=False,
+    )
+    ctx = get_lora_context()
+    assert ctx.no_lora_flag is False
+    assert ctx.token_to_slot is token_to_slot
+    assert ctx.active_slot_ids is active_slot_ids
+
+    reset_lora_context()
+    ctx = get_lora_context()
+    assert ctx.no_lora_flag is True
+    assert ctx.token_to_slot is None

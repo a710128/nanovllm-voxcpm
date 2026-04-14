@@ -5,7 +5,6 @@ from nanovllm_voxcpm.models.voxcpm.engine import (
     Config,
 )
 from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
-from nanovllm_voxcpm.utils.loader import load_lora_weights
 import os
 import torch.multiprocessing as mp
 from queue import Empty
@@ -16,7 +15,7 @@ import io
 import time
 import asyncio
 import contextlib
-from typing import Any, AsyncGenerator, List, Optional, cast
+from typing import Any, AsyncGenerator, List, Optional
 from typing_extensions import TypedDict, Literal
 import numpy as np
 from numpy.typing import NDArray
@@ -25,21 +24,6 @@ Waveform = NDArray[np.float32]
 
 
 class HealthResponse(TypedDict):
-    status: Literal["ok"]
-
-
-class SetLoraEnabledResponse(TypedDict):
-    status: Literal["ok"]
-    lora_enabled: bool
-
-
-class LoadLoraResponse(TypedDict):
-    status: Literal["ok"]
-    loaded_keys: int
-    skipped_keys: int
-
-
-class ResetLoraResponse(TypedDict):
     status: Literal["ok"]
 
 
@@ -168,34 +152,6 @@ class VoxCPMServerImpl:
 
     def is_finished(self):
         return self.llm.is_finished()
-
-    # ------------------------------------------------------------------ #
-    # LoRA Management Methods
-    # ------------------------------------------------------------------ #
-
-    def set_lora_enabled(self, enabled: bool) -> SetLoraEnabledResponse:
-        """Enable/disable LoRA layers."""
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model")
-        model = cast(VoxCPMRunner, self.llm.model_runner).model
-        model.set_lora_enabled(enabled)
-        return SetLoraEnabledResponse(status="ok", lora_enabled=enabled)
-
-    def load_lora(self, lora_path: str) -> LoadLoraResponse:
-        """Load LoRA weights from a path."""
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model. Initialize with lora_config.")
-        model = cast(VoxCPMRunner, self.llm.model_runner).model
-        loaded, skipped = load_lora_weights(model, lora_path, device="cuda")
-        return LoadLoraResponse(status="ok", loaded_keys=len(loaded), skipped_keys=len(skipped))
-
-    def reset_lora(self) -> ResetLoraResponse:
-        """Reset LoRA weights to initial state (effectively unload)."""
-        if self.lora_config is None:
-            raise RuntimeError("LoRA is not configured for this model")
-        model = cast(VoxCPMRunner, self.llm.model_runner).model
-        model.reset_lora_parameters()
-        return ResetLoraResponse(status="ok")
 
 
 def main_loop(queue_in: mp.Queue, queue_out: mp.Queue, args, kwargs):
@@ -522,16 +478,6 @@ class AsyncVoxCPMServer:
                 await self.submit("cancel", seq_id)
             del self.stream_table[seq_id]
 
-    # LoRA management methods
-    async def set_lora_enabled(self, enabled: bool) -> SetLoraEnabledResponse:
-        return await self.submit("set_lora_enabled", enabled)
-
-    async def load_lora(self, lora_path: str) -> LoadLoraResponse:
-        return await self.submit("load_lora", lora_path)
-
-    async def reset_lora(self) -> ResetLoraResponse:
-        return await self.submit("reset_lora")
-
 
 class AsyncVoxCPMServerPool:
     def __init__(
@@ -668,19 +614,6 @@ class AsyncVoxCPMServerPool:
         finally:
             self.servers_load[min_load_server_idx] -= 1
 
-    # LoRA management methods (apply to all servers)
-    async def set_lora_enabled(self, enabled: bool):
-        results = await asyncio.gather(*[server.set_lora_enabled(enabled) for server in self.servers])
-        return results[0]
-
-    async def load_lora(self, lora_path: str):
-        results = await asyncio.gather(*[server.load_lora(lora_path) for server in self.servers])
-        return results[0]
-
-    async def reset_lora(self):
-        results = await asyncio.gather(*[server.reset_lora() for server in self.servers])
-        return results[0]
-
 
 class SyncVoxCPMServerPool:
     def __init__(
@@ -784,16 +717,3 @@ class SyncVoxCPMServerPool:
                 yield item
         except StopAsyncIteration:
             return
-
-    # LoRA management methods
-    def set_lora_enabled(self, enabled: bool):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.set_lora_enabled(enabled))
-
-    def load_lora(self, lora_path: str):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.load_lora(lora_path))
-
-    def reset_lora(self):
-        assert self.loop is not None
-        return self.loop.run_until_complete(self.server_pool.reset_lora())

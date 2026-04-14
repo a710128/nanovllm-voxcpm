@@ -63,14 +63,6 @@ class Mp3Config:
 
 
 @dataclass(frozen=True)
-class LoRAStartupConfig:
-    uri: str | None
-    lora_id: str | None
-    sha256: str | None
-    cache_dir: str
-
-
-@dataclass(frozen=True)
 class ServerPoolStartupConfig:
     max_num_batched_tokens: int
     max_num_seqs: int
@@ -84,7 +76,6 @@ class ServerPoolStartupConfig:
 class ServiceConfig:
     model_path: str
     mp3: Mp3Config
-    lora: LoRAStartupConfig
     server_pool: ServerPoolStartupConfig
 
 
@@ -101,10 +92,11 @@ def load_config() -> ServiceConfig:
     lora_uri = os.environ.get("NANOVLLM_LORA_URI")
     lora_id = os.environ.get("NANOVLLM_LORA_ID")
     lora_sha256 = os.environ.get("NANOVLLM_LORA_SHA256")
-    cache_dir = os.path.expanduser(os.environ.get("NANOVLLM_CACHE_DIR", "~/.cache/nanovllm"))
 
-    if lora_uri and not lora_id:
-        raise RuntimeError("NANOVLLM_LORA_ID is required when NANOVLLM_LORA_URI is set")
+    if lora_uri or lora_id or lora_sha256:
+        raise RuntimeError(
+            "LoRA startup preload env vars were removed; use the new per-request LoRA API when available"
+        )
 
     # Server pool startup config (read at startup).
     pool_max_num_batched_tokens = _get_int_env("NANOVLLM_SERVERPOOL_MAX_NUM_BATCHED_TOKENS", 8192)
@@ -130,7 +122,6 @@ def load_config() -> ServiceConfig:
     return ServiceConfig(
         model_path=model_path,
         mp3=Mp3Config(bitrate_kbps=mp3_bitrate_kbps, quality=mp3_quality),
-        lora=LoRAStartupConfig(uri=lora_uri, lora_id=lora_id, sha256=lora_sha256, cache_dir=cache_dir),
         server_pool=ServerPoolStartupConfig(
             max_num_batched_tokens=pool_max_num_batched_tokens,
             max_num_seqs=pool_max_num_seqs,
