@@ -96,6 +96,33 @@ def test_lora_manager_unregister_drains_old_requests_and_rejects_new_ones():
         set_backend_for_testing(None)
 
 
+def test_lora_manager_unregister_while_running_drains_until_running_request_finishes():
+    from nanovllm_voxcpm.engine.lora_manager import LoRALifecycleState, LoRAManager
+    from nanovllm_voxcpm.lora import set_backend_for_testing
+
+    set_backend_for_testing(_AvailableBackend())
+    try:
+        manager = LoRAManager(max_loras=1)
+        adapter_id = manager.register_lora("demo", _payload())
+
+        manager.on_sequence_enqueued(adapter_id)
+        manager.on_sequence_started(adapter_id)
+        manager.unregister_lora("demo")
+
+        entry = manager.get_entry(adapter_id)
+        assert entry.state == LoRALifecycleState.DRAINING
+        assert entry.cpu_ref_count == 1
+        assert entry.gpu_running_ref_count == 1
+
+        with pytest.raises(ValueError, match="draining"):
+            manager.resolve_adapter("demo")
+
+        manager.on_sequence_finished(adapter_id, was_running=True)
+        assert manager.list_loras() == []
+    finally:
+        set_backend_for_testing(None)
+
+
 def test_lora_manager_supports_rank_local_registration_with_fixed_adapter_id():
     from nanovllm_voxcpm.engine.lora_manager import LoRAManager
     from nanovllm_voxcpm.lora import set_backend_for_testing
