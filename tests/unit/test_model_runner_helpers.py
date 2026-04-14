@@ -137,11 +137,112 @@ def test_write_read_shm_uses_file_fallback_for_large_payload(tmp_path):
             os.remove(overflow_path)
 
 
+def test_validate_lora_payload_rejects_unknown_module():
+    import torch.nn as nn
+
+    import nanovllm_voxcpm.engine.model_runner as model_runner
+    from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+
+    runner = object.__new__(model_runner.BaseModelRunner)
+    runner.rank = 0
+    runner.model = nn.Module()
+    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1))
+
+    payload = LoRAModelPayload(
+        modules={
+            "missing": LoRAModulePayload(
+                lora_a=torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+                lora_b=torch.tensor([[1.0]], dtype=torch.float32),
+                effective_rank=1,
+                scaling=1.0,
+            )
+        },
+        rank=1,
+        alpha=1.0,
+    )
+
+    with pytest.raises(ValueError, match="Unknown LoRA target module"):
+        runner.validate_lora_payload(payload)
+
+
+def test_validate_lora_payload_rejects_invalid_linear_shape():
+    import torch.nn as nn
+
+    import nanovllm_voxcpm.engine.model_runner as model_runner
+    from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+
+    runner = object.__new__(model_runner.BaseModelRunner)
+    runner.rank = 0
+    runner.model = nn.Module()
+    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1))
+
+    payload = LoRAModelPayload(
+        modules={
+            "linear": LoRAModulePayload(
+                lora_a=torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+                lora_b=torch.tensor([[1.0], [2.0]], dtype=torch.float32),
+                effective_rank=1,
+                scaling=1.0,
+            )
+        },
+        rank=1,
+        alpha=1.0,
+    )
+
+    with pytest.raises(ValueError, match="output dim"):
+        runner.validate_lora_payload(payload)
+
+
+def test_validate_lora_payload_rejects_qkv_target_count_mismatch():
+    import torch.nn as nn
+
+    import nanovllm_voxcpm.engine.model_runner as model_runner
+    from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload
+    from nanovllm_voxcpm.layers.lora import LoRAQKVParallelLinear
+
+    runner = object.__new__(model_runner.BaseModelRunner)
+    runner.rank = 0
+    runner.model = nn.Module()
+    runner.model.add_module(
+        "qkv",
+        LoRAQKVParallelLinear(
+            hidden_size=2,
+            head_size=1,
+            total_num_heads=2,
+            total_num_kv_heads=2,
+            bias=False,
+            lora_r=1,
+            max_loras=1,
+            max_lora_rank=1,
+        ),
+    )
+
+    payload = LoRAModelPayload(
+        modules={
+            "qkv": LoRAModulePayload(
+                lora_a=torch.tensor([[[1.0, 0.0]], [[1.0, 0.0]]], dtype=torch.float32),
+                lora_b=[torch.tensor([[1.0]], dtype=torch.float32), torch.tensor([[1.0]], dtype=torch.float32)],
+                effective_rank=1,
+                scaling=1.0,
+            )
+        },
+        rank=1,
+        alpha=1.0,
+    )
+
+    with pytest.raises(ValueError, match="LoRA A targets"):
+        runner.validate_lora_payload(payload)
+
+
 def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatch):
     from multiprocessing.shared_memory import SharedMemory
+    import torch.nn as nn
 
     import nanovllm_voxcpm.engine.model_runner as model_runner
     from nanovllm_voxcpm.engine.lora_manager import LoRAManager, LoRAModelPayload, LoRAModulePayload
+    from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.lora import LoRAAvailability, set_backend_for_testing
 
     class _AvailableBackend:
@@ -190,6 +291,8 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank0.max_lora_rank = 2
     rank0.max_loras = 1
     rank0.lora_manager = LoRAManager(max_loras=1, max_lora_rank=2)
+    rank0.model = nn.Module()
+    rank0.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
     rank0.exit = lambda: None
     rank0.shm = SharedMemory(create=True, size=1024)
 
@@ -200,6 +303,8 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank1.max_lora_rank = 2
     rank1.max_loras = 1
     rank1.lora_manager = LoRAManager(max_loras=1, max_lora_rank=2)
+    rank1.model = nn.Module()
+    rank1.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
     rank1.exit = lambda: None
     rank1.shm = SharedMemory(name=rank0.shm.name)
 

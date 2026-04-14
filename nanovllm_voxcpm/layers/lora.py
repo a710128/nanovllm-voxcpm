@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import torch
@@ -133,6 +134,15 @@ class _LoRALayerBase(nn.Module):
         if effective_rank < 0 or effective_rank > self.max_lora_rank:
             raise ValueError(f"effective_rank={effective_rank} exceeds max_lora_rank={self.max_lora_rank}")
 
+    def _validate_common_slot_payload(self, effective_rank: int, scaling: float) -> None:
+        if self.lora_r <= 0:
+            raise ValueError(f"{self.__class__.__name__} does not enable LoRA")
+        if effective_rank <= 0:
+            raise ValueError(f"effective_rank must be > 0, got {effective_rank}")
+        if not math.isfinite(scaling):
+            raise ValueError(f"LoRA scaling must be finite, got {scaling}")
+        self._validate_effective_rank(effective_rank)
+
     def _runtime_metadata(self) -> LoRAMetadata | None:
         context = get_lora_context()
         if context.token_to_slot is None:
@@ -156,6 +166,15 @@ class _LoRALayerBase(nn.Module):
     def set_slot_lora(
         self,
         slot_id: int,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor | list[torch.Tensor],
+        effective_rank: int,
+        scaling: float,
+    ) -> None:
+        raise NotImplementedError
+
+    def validate_slot_lora_payload(
+        self,
         lora_a: torch.Tensor,
         lora_b: torch.Tensor | list[torch.Tensor],
         effective_rank: int,
@@ -330,6 +349,39 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         self._lora_scaling_values[slot_id] = scaling
         self._lora_base_scaling_values[slot_id] = scaling
 
+    def validate_slot_lora_payload(
+        self,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor | list[torch.Tensor],
+        effective_rank: int,
+        scaling: float,
+    ) -> None:
+        self._validate_common_slot_payload(effective_rank, scaling)
+        if not isinstance(lora_b, list):
+            raise ValueError("LoRAQKVParallelLinear expects lora_b to be a list ordered as layer lora_targets")
+        if lora_a.ndim != 3:
+            raise ValueError(f"LoRAQKVParallelLinear expects 3D lora_a, got shape={tuple(lora_a.shape)}")
+        if lora_a.size(0) != len(self.lora_targets):
+            raise ValueError(f"Expected {len(self.lora_targets)} LoRA A targets, got {lora_a.size(0)}")
+        if lora_a.size(1) < effective_rank:
+            raise ValueError(f"LoRA A rank dim {lora_a.size(1)} is smaller than effective_rank={effective_rank}")
+        if lora_a.size(2) != self.hidden_size:
+            raise ValueError(f"Expected lora_a input dim {self.hidden_size}, got {lora_a.size(2)}")
+        if len(lora_b) != len(self.lora_targets):
+            raise ValueError(f"Expected {len(self.lora_targets)} LoRA B tensors ordered as {self.lora_targets}")
+        expected_outputs = {"q": self.q_size, "k": self.kv_size, "v": self.kv_size}
+        for target, target_b in zip(self.lora_targets, lora_b):
+            if target_b.ndim != 2:
+                raise ValueError(f"Target '{target}' expects 2D lora_b, got shape={tuple(target_b.shape)}")
+            if target_b.size(0) != expected_outputs[target]:
+                raise ValueError(
+                    f"Target '{target}' expects output dim {expected_outputs[target]}, got {target_b.size(0)}"
+                )
+            if target_b.size(1) < effective_rank:
+                raise ValueError(
+                    f"Target '{target}' rank dim {target_b.size(1)} is smaller than effective_rank={effective_rank}"
+                )
+
     def reset_lora_parameters(self):
         if self.lora_r <= 0:
             return
@@ -475,6 +527,37 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         for target_idx in self.lora_targets:
             getattr(self, f"lora_B_{target_idx}").data.zero_()
 
+    def validate_slot_lora_payload(
+        self,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor | list[torch.Tensor],
+        effective_rank: int,
+        scaling: float,
+    ) -> None:
+        self._validate_common_slot_payload(effective_rank, scaling)
+        if not isinstance(lora_b, list):
+            raise ValueError("LoRAMergedColumnParallelLinear expects lora_b to be a list ordered as layer lora_targets")
+        if lora_a.ndim != 3:
+            raise ValueError(f"LoRAMergedColumnParallelLinear expects 3D lora_a, got shape={tuple(lora_a.shape)}")
+        if lora_a.size(0) != len(self.lora_targets):
+            raise ValueError(f"Expected {len(self.lora_targets)} LoRA A targets, got {lora_a.size(0)}")
+        if lora_a.size(1) < effective_rank:
+            raise ValueError(f"LoRA A rank dim {lora_a.size(1)} is smaller than effective_rank={effective_rank}")
+        if lora_a.size(2) != self.input_size:
+            raise ValueError(f"Expected lora_a input dim {self.input_size}, got {lora_a.size(2)}")
+        if len(lora_b) != len(self.lora_targets):
+            raise ValueError(f"Expected {len(self.lora_targets)} LoRA B tensors ordered as {self.lora_targets}")
+        for target_idx, target_b in zip(self.lora_targets, lora_b):
+            if target_b.ndim != 2:
+                raise ValueError(f"Target {target_idx} expects 2D lora_b, got shape={tuple(target_b.shape)}")
+            expected_output = self.shard_output_sizes[target_idx]
+            if target_b.size(0) != expected_output:
+                raise ValueError(f"Target {target_idx} expects output dim {expected_output}, got {target_b.size(0)}")
+            if target_b.size(1) < effective_rank:
+                raise ValueError(
+                    f"Target {target_idx} rank dim {target_b.size(1)} is smaller than effective_rank={effective_rank}"
+                )
+
 
 class LoRARowParallelLinear(_LoRALayerBase):
     def __init__(
@@ -574,6 +657,29 @@ class LoRARowParallelLinear(_LoRALayerBase):
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
 
+    def validate_slot_lora_payload(
+        self,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor | list[torch.Tensor],
+        effective_rank: int,
+        scaling: float,
+    ) -> None:
+        self._validate_common_slot_payload(effective_rank, scaling)
+        if isinstance(lora_b, list):
+            raise ValueError("LoRARowParallelLinear expects tensor lora_b")
+        if lora_a.ndim != 2:
+            raise ValueError(f"LoRARowParallelLinear expects 2D lora_a, got shape={tuple(lora_a.shape)}")
+        if lora_b.ndim != 2:
+            raise ValueError(f"LoRARowParallelLinear expects 2D lora_b, got shape={tuple(lora_b.shape)}")
+        if lora_a.size(0) < effective_rank:
+            raise ValueError(f"LoRA A rank dim {lora_a.size(0)} is smaller than effective_rank={effective_rank}")
+        if lora_a.size(1) != self.shard_input_size:
+            raise ValueError(f"Expected lora_a input dim {self.shard_input_size}, got {lora_a.size(1)}")
+        if lora_b.size(0) != self.output_size:
+            raise ValueError(f"Expected lora_b output dim {self.output_size}, got {lora_b.size(0)}")
+        if lora_b.size(1) < effective_rank:
+            raise ValueError(f"LoRA B rank dim {lora_b.size(1)} is smaller than effective_rank={effective_rank}")
+
 
 class LoRALinear(_LoRALayerBase):
     def __init__(
@@ -649,6 +755,29 @@ class LoRALinear(_LoRALayerBase):
         if self.lora_r > 0:
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
+
+    def validate_slot_lora_payload(
+        self,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor | list[torch.Tensor],
+        effective_rank: int,
+        scaling: float,
+    ) -> None:
+        self._validate_common_slot_payload(effective_rank, scaling)
+        if isinstance(lora_b, list):
+            raise ValueError("LoRALinear expects tensor lora_b")
+        if lora_a.ndim != 2:
+            raise ValueError(f"LoRALinear expects 2D lora_a, got shape={tuple(lora_a.shape)}")
+        if lora_b.ndim != 2:
+            raise ValueError(f"LoRALinear expects 2D lora_b, got shape={tuple(lora_b.shape)}")
+        if lora_a.size(0) < effective_rank:
+            raise ValueError(f"LoRA A rank dim {lora_a.size(0)} is smaller than effective_rank={effective_rank}")
+        if lora_a.size(1) != self.in_features:
+            raise ValueError(f"Expected lora_a input dim {self.in_features}, got {lora_a.size(1)}")
+        if lora_b.size(0) != self.out_features:
+            raise ValueError(f"Expected lora_b output dim {self.out_features}, got {lora_b.size(0)}")
+        if lora_b.size(1) < effective_rank:
+            raise ValueError(f"LoRA B rank dim {lora_b.size(1)} is smaller than effective_rank={effective_rank}")
 
 
 def iter_lora_modules(model: nn.Module):

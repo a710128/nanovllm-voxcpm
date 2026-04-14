@@ -221,6 +221,31 @@ class BaseModelRunner:
             num_active_loras_cpu=torch.tensor([0], dtype=torch.int32),
         )
 
+    def validate_lora_payload(
+        self, payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...]
+    ) -> None:
+        rank_payload = select_lora_payload_for_rank(payload, self.rank)
+        if rank_payload.rank <= 0:
+            raise ValueError(f"LoRA payload rank must be > 0, got {rank_payload.rank}")
+        if not rank_payload.modules:
+            raise ValueError("LoRA payload must contain at least one target module")
+
+        modules = dict(self.model.named_modules())
+        for module_name, module_payload in rank_payload.modules.items():
+            try:
+                module = modules[module_name]
+            except KeyError as exc:
+                raise ValueError(f"Unknown LoRA target module '{module_name}'") from exc
+            validate_payload = getattr(module, "validate_slot_lora_payload", None)
+            if validate_payload is None:
+                raise ValueError(f"Module '{module_name}' does not support LoRA slots")
+            validate_payload(
+                module_payload.lora_a,
+                module_payload.lora_b,
+                module_payload.effective_rank,
+                module_payload.scaling,
+            )
+
     def register_lora(
         self,
         adapter_id: int,
@@ -228,6 +253,7 @@ class BaseModelRunner:
         payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...],
     ) -> None:
         rank_payload = select_lora_payload_for_rank(payload, self.rank)
+        self.validate_lora_payload(rank_payload)
         registered_adapter_id = self.lora_manager.register_lora(name, rank_payload, adapter_id=adapter_id)
         if registered_adapter_id != adapter_id:
             raise RuntimeError(f"Runner LoRA adapter id mismatch: expected {adapter_id}, got {registered_adapter_id}")

@@ -77,6 +77,17 @@
 
 当前状态：Phase 2 已实现完成。已具备 Engine 内部 `LoRA Manager`、CPU registered cache、GPU slot pool、生命周期/引用计数、scheduler LoRA capacity admission，以及 runner-owned slot admission / metadata 更新。`ServerPool` public API 与模型侧 checkpoint 解析仍按 Phase 3 执行。
 
+已落地内容：
+
+- 新增 `nanovllm_voxcpm/engine/lora_manager.py`，统一管理本机 `name -> adapter_id`、CPU 常驻 entry、生命周期状态、CPU/GPU 引用计数、GPU slot pool 与 LRU 驱逐。
+- `Sequence` / `Scheduler` / `LLMEngineBase` 已接入请求级 `lora_name` / `adapter_id` 与生命周期回调，在 `add`、`waiting -> running`、preempt、finish、cancel 路径维护 LoRA ref count。
+- scheduler 已在 prefill admission 前接入 LoRA capacity 判定；当 LoRA slot 容量不足时，只跳过因 LoRA admission 被阻塞的 seq，不放宽原有 KV / token budget FIFO 约束。
+- runner 已接入 rank-local LoRA manager、slot admission / eviction、GPU slot 装载、LoRA context metadata 原地更新，并保持 Host↔Device 边界由 runner 承担。
+- TP 控制面已支持 rank-local payload 选择、固定 adapter id 语义、共享内存 RPC 大 payload fallback，以及跨 rank RPC 失败同步。
+- 已补充单测覆盖 manager lifecycle / draining / LRU / rank 校验、scheduler LoRA capacity，以及 TP=2 control-plane smoke test。
+
+阶段边界：Phase 2 只完成 Engine/runtime/scheduler/runner 内部链路；`ServerPool` public API、LoRA checkpoint 目录解析、模型侧 key mapping 与端到端 register/generate/unregister 仍属于 Phase 3。
+
 ### 2.1 建立通用 LoRA Manager 骨架
 
 - 在 `Engine` 层引入通用 `LoRA Manager` 模块。

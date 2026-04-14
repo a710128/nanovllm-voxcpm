@@ -138,6 +138,7 @@ class LLMEngineBase:
     ) -> int:
         adapter_id = self.lora_manager.peek_next_adapter_id()
         local_payload = select_lora_payload_for_rank(payload, 0)
+        self.model_runner.call("validate_lora_payload", payload)
         try:
             self.model_runner.call("register_lora", adapter_id, name, payload)
         except Exception:
