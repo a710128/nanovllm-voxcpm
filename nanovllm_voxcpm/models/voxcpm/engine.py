@@ -67,6 +67,7 @@ class VoxCPMEngine(LLMEngineBase):
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
                 ),
+                adapter_id=seq.adapter_id,
             )
         else:
             return RunnerTask(
@@ -82,6 +83,7 @@ class VoxCPMEngine(LLMEngineBase):
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
                 ),
+                adapter_id=seq.adapter_id,
             )
 
     def postprocess_seq(self, seq: Sequence[VoxCPMSeqPayload], outputs: dict, is_prefill: bool):
@@ -122,6 +124,7 @@ class VoxCPMEngine(LLMEngineBase):
         max_generate_length: int = 2000,
         temperature: float = 1.0,
         cfg_value: float = 1.0,
+        lora_name: str | None = None,
     ):
         if max_generate_length < 1:
             raise ValueError(f"max_generate_length must be >= 1, got {max_generate_length}")
@@ -166,6 +169,8 @@ class VoxCPMEngine(LLMEngineBase):
                 "Reduce input length or max_generate_length, or increase max_model_len."
             )
 
+        adapter_id = self.resolve_lora(lora_name)
+
         seq = Sequence(
             seq_id,
             hash_tokens,
@@ -180,6 +185,8 @@ class VoxCPMEngine(LLMEngineBase):
                 max_generate_length=max_generate_length,
                 generated_waveforms=[],
             ),
+            lora_name=lora_name,
+            adapter_id=adapter_id,
         )
 
         self.add_sequence(seq)

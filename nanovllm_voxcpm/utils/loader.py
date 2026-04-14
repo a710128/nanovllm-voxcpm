@@ -5,6 +5,8 @@ import torch
 from torch import nn
 from safetensors import safe_open
 
+ShardId = str | int
+
 try:
     from safetensors.torch import load_file as safetensors_load_file
 

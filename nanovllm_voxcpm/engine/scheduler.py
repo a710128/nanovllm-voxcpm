@@ -68,12 +68,13 @@ from nanovllm_voxcpm.engine.block_manager import BlockManager
 
 
 class Scheduler:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, callbacks=None):
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
+        self.callbacks = callbacks
 
         self._id_to_seq: dict[str, Sequence] = {}
 
@@ -82,6 +83,8 @@ class Scheduler:
 
     def add(self, seq: Sequence):
         self._id_to_seq[seq.seq_id] = seq
+        if self.callbacks is not None:
+            self.callbacks.on_seq_added(seq)
 
         self.waiting.append(seq)
 
@@ -92,10 +95,13 @@ class Scheduler:
             return
 
         self.block_manager.deallocate(seq)
+        was_running = seq.status == SequenceStatus.RUNNING
         if seq.status == SequenceStatus.RUNNING:
             self.running.remove(seq)
         elif seq.status == SequenceStatus.WAITING:
             self.waiting.remove(seq)
+        if self.callbacks is not None:
+            self.callbacks.on_seq_removed(seq, was_running=was_running)
         return
 
     def schedule(self) -> tuple[list[Sequence], bool]:
@@ -103,20 +109,30 @@ class Scheduler:
         scheduled_seqs = []
         num_seqs = 0
         num_batched_tokens = 0
-        while self.waiting and num_seqs < self.max_num_seqs:
-            seq = self.waiting[0]
-            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+        deferred_waiting = deque()
+        waiting_len = len(self.waiting)
+        for _ in range(waiting_len):
+            if not self.waiting or num_seqs >= self.max_num_seqs:
                 break
-
+            seq = self.waiting.popleft()
+            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+                self.waiting.appendleft(seq)
+                break
+            if self.callbacks is not None and not self.callbacks.can_schedule(self._running_adapter_ids(), seq):
+                deferred_waiting.append(seq)
+                continue
             self.block_manager.allocate(seq)
             seq.status = SequenceStatus.RUNNING
-            self.waiting.popleft()
             self.running.append(seq)
+            if self.callbacks is not None:
+                self.callbacks.on_seq_running(seq)
             tokens_to_compute = len(seq) - seq.num_cached_tokens
             if tokens_to_compute > 0:
                 num_seqs += 1
                 scheduled_seqs.append(seq)
                 num_batched_tokens += tokens_to_compute
+        while deferred_waiting:
+            self.waiting.appendleft(deferred_waiting.pop())
 
         if scheduled_seqs:
             return scheduled_seqs, True
@@ -142,9 +158,16 @@ class Scheduler:
         seq.status = SequenceStatus.WAITING
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
+        if self.callbacks is not None:
+            self.callbacks.on_seq_waiting(seq)
 
     def finish(self, seq: Sequence):
         seq.status = SequenceStatus.FINISHED
         self.block_manager.deallocate(seq)
         self.running.remove(seq)
         self._id_to_seq.pop(seq.seq_id)
+        if self.callbacks is not None:
+            self.callbacks.on_seq_removed(seq, was_running=True)
+
+    def _running_adapter_ids(self) -> set[int]:
+        return {seq.adapter_id for seq in self.running if seq.adapter_id is not None}

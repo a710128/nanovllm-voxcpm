@@ -6,6 +6,8 @@
 
 目标：先把 LoRA 的 CUDA 执行基座做对，确保后续运行时与调度都建立在稳定的 kernel 语义之上。
 
+当前状态：Phase 1 已实现完成。
+
 ### 1.1 引入 LoRA 可用性检查
 
 - 新增 `lora.is_available()` 能力检查接口。
@@ -72,6 +74,8 @@
 ## Phase 2: Engine 运行时、GPU 缓存池、生命周期与调度
 
 目标：实现可复用的 `LoRA Manager`，把 CPU 常驻、GPU cache pool、生命周期和调度约束全部打通。
+
+当前状态：Phase 2 已实现完成。已具备 Engine 内部 `LoRA Manager`、CPU registered cache、GPU slot pool、生命周期/引用计数、scheduler LoRA capacity admission，以及 runner-owned slot admission / metadata 更新。`ServerPool` public API 与模型侧 checkpoint 解析仍按 Phase 3 执行。
 
 ### 2.1 建立通用 LoRA Manager 骨架
 
@@ -221,3 +225,4 @@
 - 先完成 Phase 1，再进入 Phase 2，最后做 Phase 3。
 - 不建议在 vendored Triton LoRA ops 与 CUDA Graph 约束未稳定前，提前改 public API 或模型层调用路径。
 - 不建议在 `LoRA Manager` 与调度协作未完成前，提前做端到端接口联调。
+- `ServerPool` 的 `register_lora` / `unregister_lora` / `list_loras` / `generate(..., lora_name=...)` 明确属于 Phase 3 范围；在 Phase 3 之前，不要求实现这些 public API，也不要求考虑它们之间的串通、一致性或联调问题。

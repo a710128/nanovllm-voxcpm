@@ -72,13 +72,16 @@ Concrete example: VoxCPM
   them to be streamed.
 """
 
+import os
 import pickle
+import tempfile
 import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm_voxcpm.config import Config
+from nanovllm_voxcpm.engine.lora_manager import LoRAManager, LoRAModelPayload
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.lora import is_available as is_lora_available
 from nanovllm_voxcpm.utils.context import (
@@ -93,6 +96,17 @@ from typing import Generic, TypeVar
 PlayloadType = TypeVar("PlayloadType")
 
 
+def select_lora_payload_for_rank(payload, rank: int):
+    if isinstance(payload, (list, tuple)):
+        if rank >= len(payload):
+            raise ValueError(f"Missing rank-local LoRA payload for rank {rank}")
+        return payload[rank]
+    return payload
+
+
+_RPC_FILE_SENTINEL = "__rpc_file__"
+
+
 class RunnerTask(Generic[PlayloadType]):
     def __init__(
         self,
@@ -101,12 +115,14 @@ class RunnerTask(Generic[PlayloadType]):
         num_cached_tokens: int,
         block_size: int,
         custom_payload: PlayloadType = None,
+        adapter_id: int | None = None,
     ):
         self.block_table = block_table
         self.seq_length = seq_length
         self.num_cached_tokens = num_cached_tokens
         self.custom_payload = custom_payload
         self.block_size = block_size
+        self.adapter_id = adapter_id
 
     @property
     def num_blocks(self):
@@ -150,6 +166,8 @@ class BaseModelRunner:
         self.rank = rank
         self.event = event
         self.max_lora_rank = max(1, getattr(config.lora_config, "max_lora_rank", 1) if config.lora_config else 1)
+        self.max_loras = max(0, getattr(config.lora_config, "max_loras", 0) if config.lora_config else 0)
+        self.lora_manager = LoRAManager(max_loras=self.max_loras, max_lora_rank=self.max_lora_rank)
 
         dist.init_process_group(
             "nccl",
@@ -201,6 +219,92 @@ class BaseModelRunner:
         set_lora_context(
             no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool),
             num_active_loras_cpu=torch.tensor([0], dtype=torch.int32),
+        )
+
+    def register_lora(
+        self,
+        adapter_id: int,
+        name: str,
+        payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...],
+    ) -> None:
+        rank_payload = select_lora_payload_for_rank(payload, self.rank)
+        registered_adapter_id = self.lora_manager.register_lora(name, rank_payload, adapter_id=adapter_id)
+        if registered_adapter_id != adapter_id:
+            raise RuntimeError(f"Runner LoRA adapter id mismatch: expected {adapter_id}, got {registered_adapter_id}")
+
+    def unregister_lora(self, adapter_id: int) -> None:
+        entry = self.lora_manager.get_entry(adapter_id)
+        self.lora_manager.unregister_lora(entry.name)
+
+    def lora_on_sequence_enqueued(self, adapter_id: int | None) -> None:
+        self.lora_manager.on_sequence_enqueued(adapter_id)
+
+    def lora_on_sequence_started(self, adapter_id: int | None) -> None:
+        self.lora_manager.on_sequence_started(adapter_id)
+
+    def lora_on_sequence_preempted(self, adapter_id: int | None) -> None:
+        self.lora_manager.on_sequence_preempted(adapter_id)
+
+    def lora_on_sequence_finished(self, adapter_id: int | None, was_running: bool) -> None:
+        self.lora_manager.on_sequence_finished(adapter_id, was_running=was_running)
+
+    def _load_lora_slot(self, slot_id: int, payload: LoRAModelPayload) -> None:
+        modules = dict(self.model.named_modules())
+        for module_name, module_payload in payload.modules.items():
+            try:
+                module = modules[module_name]
+            except KeyError as exc:
+                raise ValueError(f"Unknown LoRA target module '{module_name}'") from exc
+            if not hasattr(module, "set_slot_lora"):
+                raise ValueError(f"Module '{module_name}' does not support LoRA slots")
+            module.set_slot_lora(
+                slot_id=slot_id,
+                lora_a=module_payload.lora_a.to(device="cuda", non_blocking=True),
+                lora_b=(
+                    [tensor.to(device="cuda", non_blocking=True) for tensor in module_payload.lora_b]
+                    if isinstance(module_payload.lora_b, list)
+                    else module_payload.lora_b.to(device="cuda", non_blocking=True)
+                ),
+                effective_rank=module_payload.effective_rank,
+                scaling=module_payload.scaling,
+            )
+
+    def _prepare_lora_context(self, seqs: list[RunnerTask], token_counts: list[int]) -> None:
+        adapter_ids = [seq.adapter_id for seq in seqs]
+        if not any(adapter_id is not None for adapter_id in adapter_ids):
+            self._prepare_default_lora_context(sum(token_counts))
+            return
+
+        plan = self.lora_manager.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
+        token_to_slot = torch.tensor(plan.token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        if plan.active_slot_ids:
+            active_slot_ids = torch.tensor(plan.active_slot_ids, dtype=torch.int32, pin_memory=True).cuda(
+                non_blocking=True
+            )
+            num_tokens_per_slot = torch.tensor(plan.num_tokens_per_slot, dtype=torch.int32, pin_memory=True).cuda(
+                non_blocking=True
+            )
+            slot_start_offsets = torch.tensor(plan.slot_start_offsets, dtype=torch.int32, pin_memory=True).cuda(
+                non_blocking=True
+            )
+            token_indices_sorted_by_slot = torch.tensor(
+                plan.token_indices_sorted_by_slot, dtype=torch.int32, pin_memory=True
+            ).cuda(non_blocking=True)
+        else:
+            active_slot_ids = None
+            num_tokens_per_slot = None
+            slot_start_offsets = None
+            token_indices_sorted_by_slot = None
+        set_lora_context(
+            token_to_slot=token_to_slot,
+            token_indices_sorted_by_slot=token_indices_sorted_by_slot,
+            active_slot_ids=active_slot_ids,
+            num_tokens_per_slot=num_tokens_per_slot,
+            slot_start_offsets=slot_start_offsets,
+            no_lora_flag=not plan.active_slot_ids,
+            scratch_buffer=torch.zeros(sum(token_counts), self.max_lora_rank, dtype=self.dtype, device="cuda"),
+            no_lora_flag_cpu=torch.tensor([not plan.active_slot_ids], dtype=torch.bool),
+            num_active_loras_cpu=torch.tensor([len(plan.active_slot_ids)], dtype=torch.int32),
         )
 
     @torch.inference_mode()
@@ -276,7 +380,13 @@ class BaseModelRunner:
     def loop(self):
         while True:
             method_name, args = self.read_shm()
-            self.call(method_name, *args)
+            method = getattr(self, method_name, None)
+            error = None
+            try:
+                method(*args)
+            except Exception as exc:
+                error = exc
+            self._synchronize_rpc_result(method_name, error)
             if method_name == "exit":
                 break
 
@@ -286,22 +396,61 @@ class BaseModelRunner:
         n = int.from_bytes(self.shm.buf[0:4], "little")
         method_name, *args = pickle.loads(self.shm.buf[4 : n + 4])
         self.event.clear()
+        if method_name == _RPC_FILE_SENTINEL:
+            with open(args[0], "rb") as f:
+                method_name, *args = pickle.load(f)
         return method_name, args
 
     def write_shm(self, method_name, *args):
         assert self.world_size > 1 and self.rank == 0
         data = pickle.dumps([method_name, *args])
+        overflow_path = None
+        if len(data) + 4 > self.shm.size:
+            fd, overflow_path = tempfile.mkstemp(prefix="nanovllm-rpc-", suffix=".pkl")
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            data = pickle.dumps([_RPC_FILE_SENTINEL, overflow_path])
         n = len(data)
         self.shm.buf[0:4] = n.to_bytes(4, "little")
         self.shm.buf[4 : n + 4] = data
         for event in self.event:
             event.set()
+        return overflow_path
 
     def call(self, method_name, *args):
+        overflow_path = None
         if self.world_size > 1 and self.rank == 0:
-            self.write_shm(method_name, *args)
+            overflow_path = self.write_shm(method_name, *args)
         method = getattr(self, method_name, None)
-        return method(*args)
+        result = None
+        error = None
+        try:
+            result = method(*args)
+        except Exception as exc:
+            error = exc
+        try:
+            self._synchronize_rpc_result(method_name, error)
+            return result
+        finally:
+            if overflow_path is not None:
+                try:
+                    os.remove(overflow_path)
+                except FileNotFoundError:
+                    pass
+
+    def _synchronize_rpc_result(self, method_name: str, error: Exception | None) -> None:
+        if self.world_size <= 1 or method_name == "exit":
+            if error is not None:
+                raise error
+            return
+        failure = torch.tensor(
+            [0 if error is None else 1], dtype=torch.int32, device="cuda" if torch.cuda.is_available() else "cpu"
+        )
+        dist.all_reduce(failure, op=dist.ReduceOp.MAX)
+        if error is not None:
+            raise error
+        if int(failure.item()) != 0:
+            raise RuntimeError(f"Distributed RPC '{method_name}' failed on another rank")
 
     def prepare_block_tables(self, seqs: list[RunnerTask]) -> torch.Tensor:
         max_len = max(len(seq.block_table) for seq in seqs)
@@ -351,7 +500,8 @@ class BaseModelRunner:
             None,
             block_tables,
         )
-        self._prepare_default_lora_context(positions.size(0))
+        token_counts = [seq.seq_length - seq.num_cached_tokens for seq in seqs]
+        self._prepare_lora_context(seqs, token_counts)
         return positions
 
     def prepare_decode_context(self, seqs: list[RunnerTask]):
@@ -372,7 +522,7 @@ class BaseModelRunner:
             context_lens=context_lens,
             block_tables=block_tables,
         )
-        self._prepare_default_lora_context(positions.size(0))
+        self._prepare_lora_context(seqs, [1 for _ in seqs])
         return positions
 
     @torch.inference_mode()

@@ -62,9 +62,10 @@ import atexit
 import torch.multiprocessing as mp
 
 from nanovllm_voxcpm.config import Config
+from nanovllm_voxcpm.engine.lora_manager import LoRAManager, LoRAModelPayload
 from nanovllm_voxcpm.engine.sequence import Sequence
 from nanovllm_voxcpm.engine.scheduler import Scheduler
-from nanovllm_voxcpm.engine.model_runner import RunnerTask, BaseModelRunner
+from nanovllm_voxcpm.engine.model_runner import RunnerTask, BaseModelRunner, select_lora_payload_for_rank
 import socket
 import torch
 
@@ -86,7 +87,6 @@ class LLMEngineBase:
         config: Config,
         tensor_parallel_size: int,
     ):
-
         self.distributed_port = get_distributed_port()
 
         if config.devices is None or len(config.devices) == 0:
@@ -115,7 +115,10 @@ class LLMEngineBase:
             self.ps.append(process)
             self.events.append(event)
         self.model_runner = RunnerType(config, 0, config.devices[0], self.distributed_port, self.events)
-        self.scheduler = Scheduler(config)
+        max_loras = getattr(config.lora_config, "max_loras", 0) if config.lora_config else 0
+        max_lora_rank = getattr(config.lora_config, "max_lora_rank", None) if config.lora_config else None
+        self.lora_manager = LoRAManager(max_loras=max_loras, max_lora_rank=max_lora_rank)
+        self.scheduler = Scheduler(config, callbacks=self)
         atexit.register(self.exit)
 
     def exit(self):
@@ -129,6 +132,54 @@ class LLMEngineBase:
 
     def cancel_sequence(self, seq_id: str):
         self.scheduler.cancel(seq_id)
+
+    def register_lora(
+        self, name: str, payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...]
+    ) -> int:
+        adapter_id = self.lora_manager.peek_next_adapter_id()
+        local_payload = select_lora_payload_for_rank(payload, 0)
+        try:
+            self.model_runner.call("register_lora", adapter_id, name, payload)
+        except Exception:
+            try:
+                self.model_runner.call("unregister_lora", adapter_id)
+            except Exception:
+                pass
+            raise
+        self.lora_manager.register_lora(name, local_payload, adapter_id=adapter_id)
+        return adapter_id
+
+    def unregister_lora(self, name: str) -> None:
+        adapter_id = self.lora_manager.resolve_known_adapter(name)
+        self.model_runner.call("unregister_lora", adapter_id)
+        self.lora_manager.unregister_lora(name)
+
+    def list_loras(self):
+        return self.lora_manager.list_loras()
+
+    def resolve_lora(self, lora_name: str | None) -> int | None:
+        if lora_name is None:
+            return None
+        return self.lora_manager.resolve_adapter(lora_name)
+
+    def can_schedule(self, running_adapter_ids: set[int], seq: Sequence) -> bool:
+        return self.lora_manager.can_schedule(running_adapter_ids, seq.adapter_id)
+
+    def on_seq_added(self, seq: Sequence) -> None:
+        self.lora_manager.on_sequence_enqueued(seq.adapter_id)
+        self.model_runner.call("lora_on_sequence_enqueued", seq.adapter_id)
+
+    def on_seq_running(self, seq: Sequence) -> None:
+        self.lora_manager.on_sequence_started(seq.adapter_id)
+        self.model_runner.call("lora_on_sequence_started", seq.adapter_id)
+
+    def on_seq_waiting(self, seq: Sequence) -> None:
+        self.lora_manager.on_sequence_preempted(seq.adapter_id)
+        self.model_runner.call("lora_on_sequence_preempted", seq.adapter_id)
+
+    def on_seq_removed(self, seq: Sequence, *, was_running: bool) -> None:
+        self.lora_manager.on_sequence_finished(seq.adapter_id, was_running=was_running)
+        self.model_runner.call("lora_on_sequence_finished", seq.adapter_id, was_running)
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()

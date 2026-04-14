@@ -77,6 +77,8 @@ class Sequence(Generic[PlayloadType]):
         token_ids: list[int | bytes],
         block_size: int,
         custom_payload: PlayloadType = None,
+        lora_name: str | None = None,
+        adapter_id: int | None = None,
     ):
         self.seq_id = seq_id
         self.status = SequenceStatus.WAITING
@@ -88,6 +90,8 @@ class Sequence(Generic[PlayloadType]):
         self.block_size = block_size
 
         self.custom_payload = custom_payload
+        self.lora_name = lora_name
+        self.adapter_id = adapter_id
         self.stoped = False
 
     def __len__(self):
