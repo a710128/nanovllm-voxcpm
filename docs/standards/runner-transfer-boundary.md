@@ -1,88 +1,88 @@
-# 推理传输与同步规范
+# Inference Transfer and Synchronization Standard
 
-本规范是 `docs/adr/0001-runner-owns-host-device-transfers.md` 的可执行版本。新增或修改推理代码时必须遵守。
+This standard is the actionable version of `docs/adr/0001-runner-owns-host-device-transfers.md`. It must be followed whenever inference code is added or modified.
 
-## 1. 目标
+## 1. Goal
 
-推理热路径必须严格分为四个阶段。这里的“推理热路径”包含：逐 step 的生成路径，以及生成前的 prompt-audio latent encode 路径。
+The inference hot path must be divided into four strict phases. The "inference hot path" includes the per-step generation path and the prompt-audio latent-encoding path before generation begins.
 
-1. CPU 校验
-2. Runner 内异步 H2D
-3. GPU 纯计算且无同步
-4. Runner 内统一 D2H
+1. CPU validation
+2. Asynchronous H2D inside the runner
+3. GPU-only computation with no synchronization
+4. Unified D2H inside the runner
 
-任何实现都不得改变这个顺序。
+No implementation may change this order.
 
-## 2. 适用范围
+## 2. Scope
 
-适用于以下目录中的推理/生成热路径：
+This applies to the inference / generation hot paths in the following directories:
 
 - `nanovllm_voxcpm/engine/`
 - `nanovllm_voxcpm/models/voxcpm/`
-- 后续新增的 `nanovllm_voxcpm/models/*/`
+- Any future `nanovllm_voxcpm/models/*/` directories
 
-## 3. 分层要求
+## 3. Layering Requirements
 
 ### `server`
 
-允许：
+Allowed:
 
-- 请求参数校验
-- I/O 解析
-- CPU 数据解码和归一化
-- 把 CPU payload 传给 engine
+- Request argument validation
+- I/O parsing
+- CPU-side data decoding and normalization
+- Passing CPU payloads to the engine
 
-禁止：
+Forbidden:
 
-- 任何 `cuda` / `cpu` / `to(device)` 调用
-- 任何读取 GPU tensor 值的操作
+- Any `cuda` / `cpu` / `to(device)` call
+- Any operation that reads values from a GPU tensor
 
 ### `engine` / `scheduler`
 
-允许：
+Allowed:
 
-- 调度
-- KV 规划
-- `Sequence` 状态推进
-- 纯 CPU 后处理
+- Scheduling
+- KV planning
+- `Sequence` state advancement
+- Pure CPU post-processing
 
-禁止：
+Forbidden:
 
-- 创建 GPU tensor
-- 从 GPU 取回结果
-- 依赖 GPU 中间态做校验或停止判断
+- Creating GPU tensors
+- Pulling results back from the GPU
+- Relying on GPU intermediate state for validation or stop decisions
 
 ### `model runner`
 
-允许：
+Allowed:
 
-- 所有 H2D / D2H
-- attention context 准备
+- All H2D / D2H transfers
+- Attention-context preparation
 - GPU forward / graph replay / decode
-- 最终结果回传 CPU
+- Returning final results to the CPU
 
-约束：
+Constraints:
 
-- H2D 必须先于 GPU 计算全部完成准备
-- GPU 计算期间不得触发同步
-- D2H 必须晚于 GPU 计算完成
-- pinned memory 与 `non_blocking=True` 是强烈建议，不是替代边界约束的独立目标
+- H2D must fully prepare inputs before GPU computation begins
+- GPU computation must not trigger synchronization
+- D2H must occur only after GPU computation finishes
+- Pinned memory and `non_blocking=True` are strongly recommended, but they are not a separate goal that replaces the boundary rule itself
 
 ### `model` / `layers`
 
-允许：
+Allowed:
 
-- 纯 device 计算
+- Pure device-side computation
 
-禁止：
+Forbidden:
 
-- 直接访问 Python 标量化结果
+- Direct access to Python scalar values derived from GPU results
 - `.cpu()` / `.numpy()` / `.tolist()` / `.item()`
-- 隐式或显式 Host/Device 传输
+- Implicit or explicit Host/Device transfers
 
-## 4. 禁止模式
+## 4. Forbidden Patterns
 
-以下模式在 runner 外一律禁止：
+The following patterns are forbidden everywhere outside the runner:
 
 ```python
 tensor.cuda()
@@ -97,7 +97,7 @@ torch.cuda.synchronize()
 torch.cuda.current_stream().synchronize()
 ```
 
-以下模式即使位于 runner，也只能出现在阶段 D：
+Even inside the runner, the following patterns may appear only in Phase D:
 
 ```python
 tensor.cpu()
@@ -106,11 +106,11 @@ tensor.tolist()
 tensor.item()
 ```
 
-多个连续 D2H 读取是允许的，但它们必须发生在 GPU 计算结束之后，且不得与 GPU 计算交叉。
+Multiple consecutive D2H reads are allowed, but they must happen only after GPU computation finishes and must not overlap with GPU computation.
 
-## 5. 推荐模式
+## 5. Recommended Patterns
 
-### 阶段 A：CPU 校验
+### Phase A: CPU Validation
 
 ```python
 if max_generate_length < 1:
@@ -119,14 +119,14 @@ if max_generate_length < 1:
 payload = np.asarray(data, dtype=np.float32)
 ```
 
-### 阶段 B：Runner 内异步 H2D
+### Phase B: Asynchronous H2D Inside the Runner
 
 ```python
 gpu_inputs = torch.from_numpy(cpu_array).cuda(non_blocking=True)
 gpu_scalar = torch.tensor(values, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
 ```
 
-### 阶段 C：GPU 纯计算
+### Phase C: GPU-Only Computation
 
 ```python
 outputs = self.run_model(inputs, is_prefill)
@@ -134,38 +134,38 @@ latents = outputs["latents"]
 decoded = self.vae.decode(latents.permute(0, 2, 1))
 ```
 
-### 阶段 D：Runner 内统一 D2H
+### Phase D: Unified D2H Inside the Runner
 
 ```python
 latents_cpu = latents.to(torch.float32).cpu().numpy()
 stop_flags_cpu = outputs["stop_flag"].cpu().tolist()
 ```
 
-## 6. PR / Code Review 检查项
+## 6. PR / Code Review Checklist
 
-- 是否把所有输入校验留在 CPU？
-- 是否只有 runner 执行 H2D / D2H？
-- GPU 计算期间是否完全没有同步？
-- `postprocess_seq()` 是否只接收 CPU 数据？
-- 是否新增了 runner 外的 `.cuda()`、`.cpu()`、`.item()`、`.tolist()`？
+- Are all input validations kept on the CPU?
+- Does only the runner perform H2D / D2H?
+- Is GPU computation completely free of synchronization?
+- Does `postprocess_seq()` receive only CPU data?
+- Were any new `.cuda()`, `.cpu()`, `.item()`, or `.tolist()` calls added outside the runner?
 
-## 7. 对新增模型接入的要求
+## 7. Requirements for New Model Integrations
 
-新增 `models/<family>/runner.py` 时，必须显式满足：
+When adding a new `models/<family>/runner.py`, the following requirements must be explicitly satisfied:
 
-- 输入 payload 为 CPU 数据结构。
-- `run()` 负责全部跨设备边界。
-- 返回给 engine 的结果为 CPU 数据结构。
-- 不把设备语义泄漏到 `engine.py`、`server.py`、`model.py`。
+- Input payloads are CPU-side data structures.
+- `run()` owns the entire cross-device boundary.
+- Results returned to the engine are CPU-side data structures.
+- Device semantics do not leak into `engine.py`, `server.py`, or `model.py`.
 
-## 8. 现有代码基线
+## 8. Existing Code Baseline
 
-符合规范的典型位置：
+Typical locations that already follow the standard:
 
 - `nanovllm_voxcpm/engine/model_runner.py:292`
 - `nanovllm_voxcpm/engine/model_runner.py:297`
 - `nanovllm_voxcpm/models/voxcpm/runner.py:102`
 
-需要整改的典型位置：
+Typical location that still needs cleanup:
 
 - `nanovllm_voxcpm/models/voxcpm/server.py:108`
