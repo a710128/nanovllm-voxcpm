@@ -6,7 +6,7 @@ import time
 import traceback
 import uuid
 from queue import Empty
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, List, Optional, cast
 
 import librosa
 import numpy as np
@@ -35,6 +35,18 @@ class ModelInfoResponse(TypedDict):
     feat_dim: int
     patch_size: int
     model_path: str
+
+
+class LoRAInfo(TypedDict):
+    name: str
+
+
+class RegisterLoRAResponse(TypedDict):
+    name: str
+
+
+class UnregisterLoRAResponse(TypedDict):
+    name: str
 
 
 def gen_uuid() -> str:
@@ -110,6 +122,7 @@ class VoxCPM2ServerImpl:
         temperature: float = 1.0,
         cfg_value: float = 1.0,
         ref_audio_latents: bytes | None = None,
+        lora_name: str | None = None,
     ) -> None:
         if prompt_latents is None:
             if len(prompt_text) > 0:
@@ -126,6 +139,7 @@ class VoxCPM2ServerImpl:
                 max_generate_length=max_generate_length,
                 temperature=temperature,
                 cfg_value=cfg_value,
+                lora_name=lora_name,
             )
             return
 
@@ -146,7 +160,19 @@ class VoxCPM2ServerImpl:
             max_generate_length=max_generate_length,
             temperature=temperature,
             cfg_value=cfg_value,
+            lora_name=lora_name,
         )
+
+    def register_lora(self, name: str, path: str) -> RegisterLoRAResponse:
+        self.llm.register_lora(name, path)
+        return RegisterLoRAResponse(name=name)
+
+    def unregister_lora(self, name: str) -> UnregisterLoRAResponse:
+        self.llm.unregister_lora(name)
+        return UnregisterLoRAResponse(name=name)
+
+    def list_loras(self) -> list[LoRAInfo]:
+        return [LoRAInfo(name=entry.name) for entry in self.llm.list_loras()]
 
     def cancel(self, seq_id: str):
         self.llm.cancel_sequence(seq_id)
@@ -360,6 +386,15 @@ class AsyncVoxCPM2Server:
             with contextlib.suppress(Exception):
                 q.join_thread()
 
+    async def register_lora(self, name: str, path: str) -> RegisterLoRAResponse:
+        return await self.submit("register_lora", name, path)
+
+    async def unregister_lora(self, name: str) -> UnregisterLoRAResponse:
+        return await self.submit("unregister_lora", name)
+
+    async def list_loras(self) -> list[LoRAInfo]:
+        return await self.submit("list_loras")
+
     async def generate(
         self,
         target_text: str,
@@ -369,6 +404,7 @@ class AsyncVoxCPM2Server:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
+        lora_name: str | None = None,
     ) -> AsyncGenerator[Waveform, None]:
         seq_id = gen_uuid()
         self.stream_table[seq_id] = asyncio.Queue()
@@ -384,6 +420,7 @@ class AsyncVoxCPM2Server:
                 temperature,
                 cfg_value,
                 ref_audio_latents,
+                lora_name,
             )
             while True:
                 data = await self.stream_table[seq_id].get()
@@ -429,6 +466,8 @@ class AsyncVoxCPM2ServerPool:
         ]
         self.servers_load = np.zeros(len(self.servers), dtype=np.int32)
         self._prompt_pool = {}
+        self._registered_loras: set[str] = set()
+        self._draining_loras: set[str] = set()
 
     async def wait_for_ready(self):
         await asyncio.gather(*[server.wait_for_ready() for server in self.servers])
@@ -454,6 +493,41 @@ class AsyncVoxCPM2ServerPool:
     async def remove_prompt(self, prompt_id: str):
         del self._prompt_pool[prompt_id]
 
+    async def register_lora(self, name: str, path: str) -> RegisterLoRAResponse:
+        if name in self._registered_loras or name in self._draining_loras:
+            raise ValueError(f"LoRA '{name}' is already registered")
+        registered_servers: list[AsyncVoxCPM2Server] = []
+        try:
+            for server in self.servers:
+                await server.register_lora(name, path)
+                registered_servers.append(server)
+        except Exception:
+            for server in reversed(registered_servers):
+                with contextlib.suppress(Exception):
+                    await server.unregister_lora(name)
+            raise
+        self._registered_loras.add(name)
+        return RegisterLoRAResponse(name=name)
+
+    async def unregister_lora(self, name: str) -> UnregisterLoRAResponse:
+        if name not in self._registered_loras:
+            raise ValueError(f"LoRA '{name}' is not registered")
+        if name in self._draining_loras:
+            raise ValueError(f"LoRA '{name}' is already draining")
+        self._draining_loras.add(name)
+        try:
+            for server in self.servers:
+                await server.unregister_lora(name)
+        except Exception:
+            raise
+        self._draining_loras.remove(name)
+        self._registered_loras.remove(name)
+        return UnregisterLoRAResponse(name=name)
+
+    async def list_loras(self) -> list[LoRAInfo]:
+        visible_names = sorted(name for name in self._registered_loras if name not in self._draining_loras)
+        return [LoRAInfo(name=name) for name in visible_names]
+
     async def generate(
         self,
         target_text: str,
@@ -464,6 +538,7 @@ class AsyncVoxCPM2ServerPool:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
+        lora_name: str | None = None,
     ):
         if prompt_id is not None:
             if prompt_id not in self._prompt_pool:
@@ -475,6 +550,9 @@ class AsyncVoxCPM2ServerPool:
             prompt_info = self._prompt_pool[prompt_id]
             prompt_latents = prompt_info["latents"]
             prompt_text = prompt_info["text"]
+
+        if lora_name is not None and (lora_name not in self._registered_loras or lora_name in self._draining_loras):
+            raise ValueError(f"LoRA '{lora_name}' is not registered")
 
         min_load_server_idx = np.argmin(self.servers_load)
         self.servers_load[min_load_server_idx] += 1
@@ -488,6 +566,7 @@ class AsyncVoxCPM2ServerPool:
                 temperature,
                 cfg_value,
                 ref_audio_latents,
+                lora_name,
             ):
                 yield data
         finally:
@@ -540,6 +619,18 @@ class SyncVoxCPM2ServerPool:
         assert self.loop is not None
         return self.loop.run_until_complete(self.server_pool.get_model_info())
 
+    def register_lora(self, name: str, path: str) -> RegisterLoRAResponse:
+        assert self.loop is not None
+        return self.loop.run_until_complete(self.server_pool.register_lora(name, path))
+
+    def unregister_lora(self, name: str) -> UnregisterLoRAResponse:
+        assert self.loop is not None
+        return self.loop.run_until_complete(self.server_pool.unregister_lora(name))
+
+    def list_loras(self) -> list[LoRAInfo]:
+        assert self.loop is not None
+        return self.loop.run_until_complete(self.server_pool.list_loras())
+
     def add_prompt(self, wav: bytes, wav_format: str, prompt_text: str):
         assert self.loop is not None
         return self.loop.run_until_complete(self.server_pool.add_prompt(wav, wav_format, prompt_text))
@@ -558,6 +649,7 @@ class SyncVoxCPM2ServerPool:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
+        lora_name: str | None = None,
     ):
         assert self.loop is not None
         async_gen = self.server_pool.generate(
@@ -569,6 +661,7 @@ class SyncVoxCPM2ServerPool:
             temperature,
             cfg_value,
             ref_audio_latents,
+            lora_name,
         )
         try:
             while True:

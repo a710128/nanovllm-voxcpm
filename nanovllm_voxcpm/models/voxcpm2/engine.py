@@ -8,6 +8,7 @@ from nanovllm_voxcpm.config import Config
 from nanovllm_voxcpm.engine.llm_engine import LLMEngineBase
 from nanovllm_voxcpm.engine.sequence import Sequence
 from nanovllm_voxcpm.models.voxcpm2.config import VoxCPM2Config
+from nanovllm_voxcpm.models.voxcpm2.lora_loader import load_voxcpm2_lora_checkpoint
 from nanovllm_voxcpm.models.voxcpm2.runner import RunnerTask, VoxCPM2Payload, VoxCPM2Runner
 from nanovllm_voxcpm.models.voxcpm2.utils import mask_multichar_chinese_tokens
 
@@ -37,6 +38,10 @@ class VoxCPM2Engine(LLMEngineBase):
         self.max_model_len = config.max_model_len
         self.tokenizer = mask_multichar_chinese_tokens(LlamaTokenizerFast.from_pretrained(config.model))
         super().__init__(VoxCPM2Runner, config, config.tensor_parallel_size)
+
+    def register_lora(self, name: str, path: str) -> int:
+        payload = load_voxcpm2_lora_checkpoint(path, tp_size=self.model_runner.world_size)
+        return super().register_lora(name, payload)
 
     def preprocess_seq(self, seq: Sequence[VoxCPM2SeqPayload], is_prefill: bool) -> RunnerTask[VoxCPM2Payload]:
         if is_prefill:

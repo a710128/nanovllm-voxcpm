@@ -27,6 +27,7 @@ def _make_engine(max_model_len: int, token_count: int):
     # LLMEngineBase.add_sequence() would require scheduler/runner.
     e._captured_seq = None
     e.add_sequence = lambda seq: setattr(e, "_captured_seq", seq)
+    e.resolve_lora = lambda name: None if name is None else 7
     return e
 
 
@@ -53,3 +54,10 @@ def test_add_request_requires_positive_max_generate_length():
     e = _make_engine(max_model_len=10, token_count=1)
     with pytest.raises(ValueError, match=r"max_generate_length must be >= 1"):
         e.add_request(seq_id="s", target_text="x", max_generate_length=0)
+
+
+def test_add_request_resolves_lora_name_into_adapter_id():
+    e = _make_engine(max_model_len=11, token_count=4)
+    e.add_request(seq_id="s", target_text="x", max_generate_length=6, lora_name="demo")
+    assert e._captured_seq.lora_name == "demo"
+    assert e._captured_seq.adapter_id == 7

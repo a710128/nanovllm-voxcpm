@@ -185,6 +185,22 @@
 
 目标：在运行时能力稳定后，再把 `voxcpm` 接入，并完成 public API 重构。
 
+当前状态：Phase 3 已实现完成。`voxcpm` / `voxcpm2` 均已接入模型侧 LoRA checkpoint 解析、Engine 注册链路，以及 `ServerPool` public LoRA API；`unregister_lora` 失败后会保留 draining 状态并立即对新请求不可见。`ServerPool` 不持久化 LoRA `path`。
+
+已落地内容：
+
+- 新增 `nanovllm_voxcpm/models/voxcpm/lora_loader.py` 与 `nanovllm_voxcpm/models/voxcpm2/lora_loader.py`，支持 `lora_config.json` / `lora_weights.safetensors` 读取、key 映射、payload 构建与 TP rank-local shard。
+- `VoxCPMEngine` / `VoxCPM2Engine` 已支持 `register_lora(name, path)`，在 engine 层把 checkpoint 目录加载为 `LoRAModelPayload` 后接入 Phase 2 的通用 `LoRA Manager` 注册链路。
+- `VoxCPM` / `VoxCPM2` 的 `ServerImpl`、异步 `Server`、异步 `ServerPool`、同步 `ServerPool` 已补齐：
+  - `register_lora(name, path)`
+  - `unregister_lora(name)`
+  - `list_loras()`
+  - `generate(..., lora_name: str | None = None)`
+- `ServerPool` 现为公开 LoRA 状态真相源：维护已注册名集合与 draining 集合；draining LoRA 不再出现在 `list_loras()` 中，也不能再被新 `generate` 请求引用。
+- 已补充单测覆盖 loader、`lora_name -> adapter_id` 请求绑定、`ServerPool` register/list/generate/unregister 主路径，以及 unregister 部分失败后保持 draining 的语义。
+
+阶段边界：Phase 3 已完成 public API 与模型接线；后续若要继续优化，可单独处理 LoRA 注册时的同步加载/TP shard 阻塞问题与更强的并发控制，但这些不再阻塞当前 Phase 3 交付。
+
 ### 3.1 接入 VoxCPM 模型侧 LoRA 解析
 
 - 在 `voxcpm` 模型侧实现：
