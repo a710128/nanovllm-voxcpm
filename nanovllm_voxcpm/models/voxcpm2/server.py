@@ -112,7 +112,6 @@ class VoxCPM2ServerImpl:
             wav_tensor = wav_tensor.unsqueeze(0)
         if wav_tensor.size(0) > 1:
             wav_tensor = wav_tensor.mean(dim=0, keepdim=True)
-        wav_tensor = wav_tensor.cuda()
         latents = self.llm.encode_latents(wav_tensor)
         assert latents.shape[0] % self.llm.patch_size == 0
         return latents.tobytes()

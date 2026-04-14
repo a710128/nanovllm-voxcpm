@@ -90,6 +90,7 @@ class VoxCPMRunner(BaseModelRunner):
 
     def encode_latents(self, wav: torch.Tensor) -> np.ndarray:
         assert wav.ndim == 2, "Invalid shape of wav"
+        wav = wav.to(torch.float32).cuda()
         return (
             self.vae.encode(wav, self.vae.sample_rate)
             .permute(0, 2, 1)

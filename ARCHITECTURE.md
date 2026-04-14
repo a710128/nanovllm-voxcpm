@@ -11,6 +11,7 @@ This document explains the architecture of the `nanovllm_voxcpm/` package: what 
 - [VoxCPM Integration](#voxcpm-integration-model-specific-layer)
 - [Weight Loading and LoRA](#weight-loading-and-lora)
 - [Data Flow Walkthrough](#data-flow-walkthrough-what-happens-on-one-step)
+- [Transfer Boundary Rule](#transfer-boundary-rule)
 - [Where To Start](#where-to-start-recommended-reading-order)
 - [Extending the System](#extending-the-system-adding-a-new-model-family)
 - [Operational Notes / Pitfalls](#operational-notes--pitfalls)
@@ -174,6 +175,19 @@ FlashAttention kernels require metadata such as:
 - how to map logical positions to physical blocks (`block_tables`)
 
 This repo stores that metadata in a module-level global `Context`. The runner sets it before calling the model; attention layers read it inside their forward pass.
+
+## Transfer Boundary Rule
+
+The architecture rule is that the inference hot path treats the model runner as the only legal Host/Device boundary.
+
+- CPU-side modules (`server`, `engine`, `scheduler`) validate inputs, construct request state, and perform only CPU-side bookkeeping.
+- The runner owns all Host to Device and Device to Host transfers for inference.
+- GPU compute must happen after CPU validation and after runner-side H2D setup.
+- GPU compute must not trigger synchronization before the runner performs the final D2H handoff.
+
+Current code is not fully aligned yet: `nanovllm_voxcpm/models/voxcpm/server.py` still contains a server-side GPU transfer in `encode_latents()`. The ADR and standard document the intended boundary and the required cleanup direction.
+
+See `docs/adr/0001-runner-owns-host-device-transfers.md` for the architectural decision and `docs/standards/runner-transfer-boundary.md` for the implementation standard.
 
 ## VoxCPM Integration (Model-Specific Layer)
 

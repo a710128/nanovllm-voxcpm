@@ -107,7 +107,6 @@ class VoxCPMServerImpl:
 
     def encode_latents(self, wav: bytes, wav_format: str) -> bytes:
         wav_tensor, sr = torchaudio.load(io.BytesIO(wav), format=wav_format)
-        wav_tensor = wav_tensor.cuda()
         if sr != self.sample_rate:
             wav_tensor = torchaudio.functional.resample(wav_tensor, sr, self.sample_rate)
 
