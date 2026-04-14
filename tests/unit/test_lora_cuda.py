@@ -168,6 +168,89 @@ def test_lora_linear_cuda_graph_replay():
     set_backend_for_testing(_FakePunicaBackend())
 
 
+def test_lora_linear_triton_lora_b_pointer_cache_stays_bounded():
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+    from nanovllm_voxcpm.lora_ops.triton_ops import utils as lora_utils
+    from nanovllm_voxcpm.utils.context import set_lora_context
+
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    lora_utils._LORA_A_PTR_DICT.clear()
+    lora_utils._LORA_B_PTR_DICT.clear()
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1).cuda().half()
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.tensor([[1.0, 0.0]], device="cuda", dtype=torch.float16),
+            lora_b=torch.tensor([[2.0]], device="cuda", dtype=torch.float16),
+            effective_rank=1,
+            scaling=0.5,
+        )
+
+    x = torch.tensor([[4.0, 8.0]], device="cuda", dtype=torch.float16)
+    set_lora_context(
+        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+        no_lora_flag=False,
+        scratch_buffer=torch.zeros(1, 1, device="cuda", dtype=torch.float16),
+        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
+        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+    )
+
+    for _ in range(10):
+        out = layer(x)
+
+    assert torch.allclose(out.cpu().flatten(), torch.tensor([4.0], dtype=torch.float16))
+    assert len(lora_utils._LORA_B_PTR_DICT) == 1
+    set_backend_for_testing(_FakePunicaBackend())
+
+
+def test_lora_merged_column_set_slot_applies_scaling_once():
+    from nanovllm_voxcpm.layers.lora import LoRAMergedColumnParallelLinear
+    from nanovllm_voxcpm.utils.context import set_lora_context
+
+    layer = (
+        LoRAMergedColumnParallelLinear(
+            input_size=2,
+            output_sizes=[1, 1],
+            bias=False,
+            lora_r=1,
+            lora_targets=[0],
+            max_loras=1,
+            max_lora_rank=1,
+        )
+        .cuda()
+        .half()
+    )
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.tensor([[[1.0, 0.0]]], device="cuda", dtype=torch.float16),
+            lora_b=[torch.tensor([[2.0]], device="cuda", dtype=torch.float16)],
+            effective_rank=1,
+            scaling=0.5,
+        )
+
+    x = torch.tensor([[4.0, 8.0]], device="cuda", dtype=torch.float16)
+    set_lora_context(
+        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+        no_lora_flag=False,
+        scratch_buffer=torch.zeros(1, 1, device="cuda", dtype=torch.float16),
+    )
+
+    out = layer(x).cpu()
+    assert torch.allclose(out, torch.tensor([[4.0, 0.0]], dtype=torch.float16))
+
+
 def _make_tp2_qkv_layer(rank: int):
     from nanovllm_voxcpm.layers.lora import LoRAQKVParallelLinear
     import nanovllm_voxcpm.layers.lora as lora_layers

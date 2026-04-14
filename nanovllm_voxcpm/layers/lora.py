@@ -133,10 +133,6 @@ class _LoRALayerBase(nn.Module):
         if effective_rank < 0 or effective_rank > self.max_lora_rank:
             raise ValueError(f"effective_rank={effective_rank} exceeds max_lora_rank={self.max_lora_rank}")
 
-    def _scaled_weight(self, weight: torch.Tensor) -> torch.Tensor:
-        scaling = self.lora_scaling.to(device=weight.device, dtype=weight.dtype)
-        return weight * scaling.view(-1, 1, 1)
-
     def _runtime_metadata(self) -> LoRAMetadata | None:
         context = get_lora_context()
         if context.token_to_slot is None:
@@ -278,11 +274,11 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         metadata = self._runtime_metadata()
         target_idx = self.target_to_index[target]
         if target == "q":
-            lora_b = self._scaled_weight(self.lora_B_q)
+            lora_b = self.lora_B_q
         elif target == "k":
-            lora_b = self._scaled_weight(self.lora_B_k)
+            lora_b = self.lora_B_k
         else:
-            lora_b = self._scaled_weight(self.lora_B_v)
+            lora_b = self.lora_B_v
         return backend.add_lora(
             output,
             x_flat,
@@ -324,7 +320,9 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
             self.lora_A.data[slot_id, target_idx, :effective_rank].copy_(target_a[:effective_rank])
         for target, target_b in zip(self.lora_targets, lora_b):
             getattr(self, f"lora_B_{target}").data[slot_id].zero_()
-            getattr(self, f"lora_B_{target}").data[slot_id, :, :effective_rank].copy_(target_b[:, :effective_rank])
+            getattr(self, f"lora_B_{target}").data[slot_id, :, :effective_rank].copy_(
+                target_b[:, :effective_rank] * scaling
+            )
         self.effective_lora_rank[slot_id] = effective_rank
         self.lora_scaling[slot_id] = scaling
         self.lora_base_scaling[slot_id] = scaling
@@ -434,12 +432,11 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         splits = list(out_flat.split(self.shard_output_sizes, dim=-1))
         for target_idx in self.lora_targets:
             fused_idx = self.target_to_index[target_idx]
-            lora_b = self._scaled_weight(getattr(self, f"lora_B_{target_idx}"))
             splits[target_idx] = backend.add_lora(
                 splits[target_idx],
                 x_flat,
                 self.lora_A[:, fused_idx],
-                lora_b,
+                getattr(self, f"lora_B_{target_idx}"),
                 indices=token_to_slot,
                 metadata=metadata,
                 scaling=1.0,
@@ -461,7 +458,9 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
             self.lora_A.data[slot_id, fused_idx, :effective_rank].copy_(target_a[:effective_rank])
         for target_idx, target_b in zip(self.lora_targets, lora_b):
             getattr(self, f"lora_B_{target_idx}").data[slot_id].zero_()
-            getattr(self, f"lora_B_{target_idx}").data[slot_id, :, :effective_rank].copy_(target_b[:, :effective_rank])
+            getattr(self, f"lora_B_{target_idx}").data[slot_id, :, :effective_rank].copy_(
+                target_b[:, :effective_rank] * scaling
+            )
         self.effective_lora_rank[slot_id] = effective_rank
         self.lora_scaling[slot_id] = scaling
         self.lora_base_scaling[slot_id] = scaling
@@ -540,7 +539,7 @@ class LoRARowParallelLinear(_LoRALayerBase):
                 y_flat,
                 x_flat,
                 self.lora_A,
-                self._scaled_weight(self.lora_B),
+                self.lora_B,
                 indices=token_to_slot,
                 metadata=metadata,
                 scaling=1.0,
@@ -562,7 +561,7 @@ class LoRARowParallelLinear(_LoRALayerBase):
         self.lora_A.data[slot_id].zero_()
         self.lora_B.data[slot_id].zero_()
         self.lora_A.data[slot_id, :effective_rank].copy_(lora_a[:effective_rank])
-        self.lora_B.data[slot_id, :, :effective_rank].copy_(lora_b[:, :effective_rank])
+        self.lora_B.data[slot_id, :, :effective_rank].copy_(lora_b[:, :effective_rank] * scaling)
         self.effective_lora_rank[slot_id] = effective_rank
         self.lora_scaling[slot_id] = scaling
         self.lora_base_scaling[slot_id] = scaling
@@ -619,7 +618,7 @@ class LoRALinear(_LoRALayerBase):
             y_flat,
             x_flat,
             self.lora_A,
-            self._scaled_weight(self.lora_B),
+            self.lora_B,
             indices=token_to_slot,
             metadata=metadata,
             scaling=1.0,
@@ -638,7 +637,7 @@ class LoRALinear(_LoRALayerBase):
         self.lora_A.data[slot_id].zero_()
         self.lora_B.data[slot_id].zero_()
         self.lora_A.data[slot_id, :effective_rank].copy_(lora_a[:effective_rank])
-        self.lora_B.data[slot_id, :, :effective_rank].copy_(lora_b[:, :effective_rank])
+        self.lora_B.data[slot_id, :, :effective_rank].copy_(lora_b[:, :effective_rank] * scaling)
         self.effective_lora_rank[slot_id] = effective_rank
         self.lora_scaling[slot_id] = scaling
         self.lora_base_scaling[slot_id] = scaling
