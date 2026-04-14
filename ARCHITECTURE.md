@@ -312,6 +312,9 @@ LoRA is implemented with:
 - fused LoRA input projections where possible (to reduce matmuls)
 - fixed slot-major weights and runtime slot metadata so CUDA graphs can remain valid
 - name mapping when loading external LoRA checkpoints because this repo uses fused projections internally
+- separate engine control-plane lifecycle state and runner runtime residency state
+
+See `docs/adr/0002-lora-lifecycle-and-residency.md` for the LoRA lifecycle, CPU residency, GPU slot residency, draining, scheduling, and CUDA graph decision.
 
 ## Data Flow Walkthrough (What Happens on One Step)
 
