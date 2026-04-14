@@ -241,7 +241,7 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     import torch.nn as nn
 
     import nanovllm_voxcpm.engine.model_runner as model_runner
-    from nanovllm_voxcpm.engine.lora_manager import LoRAManager, LoRAModelPayload, LoRAModulePayload
+    from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload, LoRARuntime
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.lora import LoRAAvailability, set_backend_for_testing
 
@@ -290,7 +290,7 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank0.event = [event]
     rank0.max_lora_rank = 2
     rank0.max_loras = 1
-    rank0.lora_manager = LoRAManager(max_loras=1, max_lora_rank=2)
+    rank0.lora_runtime = LoRARuntime(max_loras=1, max_lora_rank=2)
     rank0.model = nn.Module()
     rank0.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
     rank0.exit = lambda: None
@@ -302,7 +302,7 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank1.event = event
     rank1.max_lora_rank = 2
     rank1.max_loras = 1
-    rank1.lora_manager = LoRAManager(max_loras=1, max_lora_rank=2)
+    rank1.lora_runtime = LoRARuntime(max_loras=1, max_lora_rank=2)
     rank1.model = nn.Module()
     rank1.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
     rank1.exit = lambda: None
@@ -313,8 +313,8 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     set_backend_for_testing(_AvailableBackend())
     try:
         rank0.call("register_lora", 3, "demo", [_payload(1.0), _payload(2.0)])
-        assert rank0.lora_manager.get_entry(3).alpha == 1.0
-        assert rank1.lora_manager.get_entry(3).alpha == 2.0
+        assert rank0.lora_runtime.get_entry(3).alpha == 1.0
+        assert rank1.lora_runtime.get_entry(3).alpha == 2.0
 
         rank0.call("exit")
         worker.join(timeout=1)

@@ -81,7 +81,7 @@ from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm_voxcpm.config import Config
-from nanovllm_voxcpm.engine.lora_manager import LoRAManager, LoRAModelPayload
+from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRARuntime
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.lora import is_available as is_lora_available
 from nanovllm_voxcpm.utils.context import (
@@ -167,7 +167,7 @@ class BaseModelRunner:
         self.event = event
         self.max_lora_rank = max(1, getattr(config.lora_config, "max_lora_rank", 1) if config.lora_config else 1)
         self.max_loras = max(0, getattr(config.lora_config, "max_loras", 0) if config.lora_config else 0)
-        self.lora_manager = LoRAManager(max_loras=self.max_loras, max_lora_rank=self.max_lora_rank)
+        self.lora_runtime = LoRARuntime(max_loras=self.max_loras, max_lora_rank=self.max_lora_rank)
 
         dist.init_process_group(
             "nccl",
@@ -254,25 +254,25 @@ class BaseModelRunner:
     ) -> None:
         rank_payload = select_lora_payload_for_rank(payload, self.rank)
         self.validate_lora_payload(rank_payload)
-        registered_adapter_id = self.lora_manager.register_lora(name, rank_payload, adapter_id=adapter_id)
+        registered_adapter_id = self.lora_runtime.register_lora(name, rank_payload, adapter_id=adapter_id)
         if registered_adapter_id != adapter_id:
             raise RuntimeError(f"Runner LoRA adapter id mismatch: expected {adapter_id}, got {registered_adapter_id}")
 
     def unregister_lora(self, adapter_id: int) -> None:
-        entry = self.lora_manager.get_entry(adapter_id)
-        self.lora_manager.unregister_lora(entry.name)
+        entry = self.lora_runtime.get_entry(adapter_id)
+        self.lora_runtime.unregister_lora(entry.name)
 
     def lora_on_sequence_enqueued(self, adapter_id: int | None) -> None:
-        self.lora_manager.on_sequence_enqueued(adapter_id)
+        self.lora_runtime.on_sequence_enqueued(adapter_id)
 
     def lora_on_sequence_started(self, adapter_id: int | None) -> None:
-        self.lora_manager.on_sequence_started(adapter_id)
+        self.lora_runtime.on_sequence_started(adapter_id)
 
     def lora_on_sequence_preempted(self, adapter_id: int | None) -> None:
-        self.lora_manager.on_sequence_preempted(adapter_id)
+        self.lora_runtime.on_sequence_preempted(adapter_id)
 
     def lora_on_sequence_finished(self, adapter_id: int | None, was_running: bool) -> None:
-        self.lora_manager.on_sequence_finished(adapter_id, was_running=was_running)
+        self.lora_runtime.on_sequence_finished(adapter_id, was_running=was_running)
 
     def _load_lora_slot(self, slot_id: int, payload: LoRAModelPayload) -> None:
         modules = dict(self.model.named_modules())
@@ -301,7 +301,7 @@ class BaseModelRunner:
             self._prepare_default_lora_context(sum(token_counts))
             return
 
-        plan = self.lora_manager.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
+        plan = self.lora_runtime.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
         token_to_slot = torch.tensor(plan.token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         if plan.active_slot_ids:
             active_slot_ids = torch.tensor(plan.active_slot_ids, dtype=torch.int32, pin_memory=True).cuda(

@@ -26,7 +26,7 @@ def _payload(scale: float = 1.0):
     )
 
 
-def test_lora_manager_lifecycle_and_batch_plan():
+def test_lora_manager_lifecycle_and_draining():
     from nanovllm_voxcpm.engine.lora_manager import LoRALifecycleState, LoRAManager
     from nanovllm_voxcpm.lora import set_backend_for_testing
 
@@ -38,20 +38,6 @@ def test_lora_manager_lifecycle_and_batch_plan():
         manager.on_sequence_enqueued(adapter_id)
         manager.on_sequence_started(adapter_id)
 
-        loads = []
-        plan = manager.build_batch_plan(
-            [adapter_id, None, adapter_id],
-            [2, 1, 1],
-            lambda slot_id, payload: loads.append((slot_id, payload.rank)),
-        )
-
-        assert loads == [(0, 1)]
-        assert plan.token_to_slot == [0, 0, -1, 0]
-        assert plan.token_indices_sorted_by_slot == [0, 1, 3]
-        assert plan.active_slot_ids == [0]
-        assert plan.num_tokens_per_slot == [3]
-        assert plan.slot_start_offsets == [0, 3]
-
         manager.on_sequence_finished(adapter_id, was_running=True)
         assert manager.get_entry(adapter_id).state == LoRALifecycleState.REGISTERED
 
@@ -61,7 +47,7 @@ def test_lora_manager_lifecycle_and_batch_plan():
         set_backend_for_testing(None)
 
 
-def test_lora_manager_capacity_and_lru_eviction():
+def test_lora_manager_tracks_admission_capacity_without_runtime_payloads():
     from nanovllm_voxcpm.engine.lora_manager import LoRAManager
     from nanovllm_voxcpm.lora import set_backend_for_testing
 
@@ -75,22 +61,11 @@ def test_lora_manager_capacity_and_lru_eviction():
         for adapter_id in (adapter_a, adapter_b):
             manager.on_sequence_enqueued(adapter_id)
             manager.on_sequence_started(adapter_id)
-        manager.build_batch_plan([adapter_a, adapter_b], [1, 1], lambda slot_id, payload: None)
 
         assert manager.can_schedule({adapter_a, adapter_b}, adapter_c) is False
 
         manager.on_sequence_preempted(adapter_b)
         assert manager.can_schedule({adapter_a}, adapter_c) is True
-
-        loads = []
-        plan = manager.build_batch_plan(
-            [adapter_a, adapter_c],
-            [1, 1],
-            lambda slot_id, payload: loads.append((slot_id, payload.alpha)),
-        )
-        assert loads == [(1, 3.0)]
-        assert plan.active_slot_ids == [0, 1]
-        assert sorted(plan.adapter_to_slot) == [adapter_a, adapter_c]
     finally:
         set_backend_for_testing(None)
 
@@ -135,8 +110,8 @@ def test_lora_manager_supports_rank_local_registration_with_fixed_adapter_id():
 
         assert adapter0 == 7
         assert adapter1 == 7
-        assert rank0.get_entry(7).model_payload.alpha == 1.0
-        assert rank1.get_entry(7).model_payload.alpha == 2.0
+        assert rank0.get_entry(7).alpha == 1.0
+        assert rank1.get_entry(7).alpha == 2.0
     finally:
         set_backend_for_testing(None)
 
