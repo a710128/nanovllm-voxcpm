@@ -176,6 +176,17 @@ class _LoRALayerBase(nn.Module):
     def reset_lora_parameters(self):
         raise NotImplementedError
 
+    def _clear_slot_metadata(self, slot_id: int) -> None:
+        self.effective_lora_rank[slot_id] = 0
+        self.lora_scaling[slot_id] = 0
+        self.lora_base_scaling[slot_id] = 0
+        self._effective_lora_rank_values[slot_id] = 0
+        self._lora_scaling_values[slot_id] = 0.0
+        self._lora_base_scaling_values[slot_id] = 0.0
+
+    def clear_slot_lora(self, slot_id: int) -> None:
+        raise NotImplementedError
+
 
 class LoRAQKVParallelLinear(_LoRALayerBase):
     def __init__(
@@ -370,6 +381,14 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         for target in self.lora_targets:
             getattr(self, f"lora_B_{target}").data.zero_()
 
+    def clear_slot_lora(self, slot_id: int) -> None:
+        if not self.supports_lora:
+            return
+        self.lora_A.data[slot_id].zero_()
+        for target in self.lora_targets:
+            getattr(self, f"lora_B_{target}").data[slot_id].zero_()
+        self._clear_slot_metadata(slot_id)
+
 
 class LoRAMergedColumnParallelLinear(_LoRALayerBase):
     def __init__(
@@ -498,6 +517,14 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         for target_idx in self.lora_targets:
             getattr(self, f"lora_B_{target_idx}").data.zero_()
 
+    def clear_slot_lora(self, slot_id: int) -> None:
+        if not self.supports_lora:
+            return
+        self.lora_A.data[slot_id].zero_()
+        for target_idx in self.lora_targets:
+            getattr(self, f"lora_B_{target_idx}").data[slot_id].zero_()
+        self._clear_slot_metadata(slot_id)
+
     def validate_slot_lora_payload(
         self,
         lora_a: torch.Tensor,
@@ -623,6 +650,13 @@ class LoRARowParallelLinear(_LoRALayerBase):
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
 
+    def clear_slot_lora(self, slot_id: int) -> None:
+        if not self.supports_lora:
+            return
+        self.lora_A.data[slot_id].zero_()
+        self.lora_B.data[slot_id].zero_()
+        self._clear_slot_metadata(slot_id)
+
     def validate_slot_lora_payload(
         self,
         lora_a: torch.Tensor,
@@ -716,6 +750,13 @@ class LoRALinear(_LoRALayerBase):
         if self.supports_lora:
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
+
+    def clear_slot_lora(self, slot_id: int) -> None:
+        if not self.supports_lora:
+            return
+        self.lora_A.data[slot_id].zero_()
+        self.lora_B.data[slot_id].zero_()
+        self._clear_slot_metadata(slot_id)
 
     def validate_slot_lora_payload(
         self,

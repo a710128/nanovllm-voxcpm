@@ -148,6 +148,13 @@ def assign_outputs(inputs, outputs, bs):
         outputs[k][:bs] = inputs[k]
 
 
+def _clear_lora_slot_modules(modules, slot_id: int) -> None:
+    for module in modules.values():
+        clear_slot_lora = getattr(module, "clear_slot_lora", None)
+        if clear_slot_lora is not None:
+            clear_slot_lora(slot_id)
+
+
 class BaseModelRunner:
     model: torch.nn.Module
 
@@ -276,6 +283,7 @@ class BaseModelRunner:
 
     def _load_lora_slot(self, slot_id: int, payload: LoRAModelPayload) -> None:
         modules = dict(self.model.named_modules())
+        _clear_lora_slot_modules(modules, slot_id)
         for module_name, module_payload in payload.modules.items():
             try:
                 module = modules[module_name]

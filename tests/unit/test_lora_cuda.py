@@ -250,6 +250,58 @@ def test_lora_merged_column_set_slot_applies_scaling_once():
     assert torch.allclose(out, torch.tensor([[4.0, 0.0]], dtype=torch.float16))
 
 
+def test_lora_qkv_cuda_graph_replay_after_runtime_slot_update():
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+    from nanovllm_voxcpm.utils.context import set_lora_context
+
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    layer = _make_tp2_qkv_layer(0)
+    with torch.no_grad():
+        layer.lora_A.zero_()
+        layer.lora_B_q.zero_()
+        layer.lora_B_k.zero_()
+        layer.lora_B_v.zero_()
+        layer.effective_lora_rank.zero_()
+
+    x_buffer = torch.zeros(1, 2, device="cuda")
+    out_buffer = torch.zeros(1, 3, device="cuda")
+    set_lora_context(
+        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+        no_lora_flag=False,
+        scratch_buffer=torch.zeros(1, 1, device="cuda"),
+        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
+        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+    )
+
+    graph = torch.cuda.CUDAGraph()
+    x_buffer.copy_(torch.tensor([[5.0, 7.0]], device="cuda"))
+    out_buffer.copy_(layer(x_buffer))
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        out_buffer.copy_(layer(x_buffer))
+
+    with torch.no_grad():
+        layer.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.tensor([[[1.0, 0.0]], [[1.0, 0.0]], [[1.0, 0.0]]], device="cuda"),
+            lora_b=[
+                torch.tensor([[1.0]], device="cuda"),
+                torch.tensor([[2.0]], device="cuda"),
+                torch.tensor([[3.0]], device="cuda"),
+            ],
+            effective_rank=1,
+            scaling=1.0,
+        )
+
+    graph.replay()
+    assert torch.allclose(out_buffer.cpu(), torch.tensor([[10.0, 22.0, 25.0]]))
+    set_backend_for_testing(_FakePunicaBackend())
+
+
 def _make_tp2_qkv_layer(rank: int):
     from nanovllm_voxcpm.layers.lora import LoRAQKVParallelLinear
     import nanovllm_voxcpm.layers.lora as lora_layers

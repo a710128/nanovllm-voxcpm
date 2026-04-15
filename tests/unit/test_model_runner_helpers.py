@@ -45,6 +45,35 @@ def test_select_lora_payload_for_rank():
         select_lora_payload_for_rank([payload0], 1)
 
 
+def test_clear_lora_slot_modules_clears_linear_modules_and_metadata():
+    import torch.nn as nn
+
+    import nanovllm_voxcpm.engine.model_runner as model_runner
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+
+    model = nn.Module()
+    model.add_module("first", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=1))
+    model.add_module("second", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=1))
+    with torch.no_grad():
+        for module in model.children():
+            module.set_slot_lora(
+                slot_id=0,
+                lora_a=torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+                lora_b=torch.tensor([[2.0]], dtype=torch.float32),
+                effective_rank=1,
+                scaling=1.0,
+            )
+
+    model_runner._clear_lora_slot_modules(dict(model.named_modules()), 0)
+
+    for module in model.children():
+        assert torch.count_nonzero(module.lora_A[0]) == 0
+        assert torch.count_nonzero(module.lora_B[0]) == 0
+        assert int(module.effective_lora_rank[0].item()) == 0
+        assert float(module.lora_scaling[0].item()) == 0.0
+        assert float(module.lora_base_scaling[0].item()) == 0.0
+
+
 def test_base_model_runner_call_synchronizes_tp_broadcast(monkeypatch):
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
