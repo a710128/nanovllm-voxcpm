@@ -6,7 +6,7 @@ This folder contains a production-oriented FastAPI wrapper around
 Key properties:
 
 - Stateless API (no `prompt_id`, no prompt pool endpoints)
-- No runtime LoRA management endpoints
+- Runtime LoRA management via `/loras`
 - `/generate` streams MP3 (`audio/mpeg`) encoded server-side via `lameenc`
 
 ## Install (uv)
@@ -35,11 +35,17 @@ Environment variables:
 - MP3 encoding (read at startup):
   - `NANOVLLM_MP3_BITRATE_KBPS` (int, default `192`)
   - `NANOVLLM_MP3_QUALITY` (int, default `2`, allowed `0..2`)
-- LoRA startup (optional; instance-level fixed, no runtime switching):
-  - `NANOVLLM_LORA_URI` (examples: `file:///...`, `https://...`, `s3://bucket/key`, `hf://repo@rev?path=...`)
-  - `NANOVLLM_LORA_ID` (required if `NANOVLLM_LORA_URI` is set)
-  - `NANOVLLM_LORA_SHA256` (optional; full-file checksum)
-  - `NANOVLLM_CACHE_DIR` (default `~/.cache/nanovllm`)
+- LoRA startup preload env vars are removed. Register adapters at runtime via `POST /loras`.
+- Runtime LoRA capacity (read at startup):
+  - `NANOVLLM_LORA_ENABLED` (bool, default `false`; must be `true` to register adapters)
+  - `NANOVLLM_LORA_MAX_LORAS` (int, default `1`)
+  - `NANOVLLM_LORA_MAX_LORA_RANK` (int, default `32`)
+  - `NANOVLLM_LORA_ENABLE_LM` (bool override; default enables LM LoRA)
+  - `NANOVLLM_LORA_ENABLE_DIT` (bool override; default enables DiT LoRA)
+  - `NANOVLLM_LORA_ENABLE_PROJ` (bool override; default enables projection LoRA)
+  - `NANOVLLM_LORA_TARGET_MODULES_LM` (comma-separated override; default enables all supported LM targets)
+  - `NANOVLLM_LORA_TARGET_MODULES_DIT` (comma-separated override; default enables all supported DiT targets)
+  - `NANOVLLM_LORA_TARGET_PROJ_MODULES` (comma-separated override; default is architecture-specific)
 
 - Server pool startup (read at startup):
   - `NANOVLLM_SERVERPOOL_MAX_NUM_BATCHED_TOKENS` (int, default `8192`)
@@ -57,7 +63,7 @@ step_0002000/
   lora_config.json
 ```
 
-If `lora_config.json` exists, the service will read `lora_config` from it to initialize LoRA structure.
+If `lora_config.json` exists, the core loader reads adapter rank/alpha from it during `POST /loras` registration.
 
 ## Run
 

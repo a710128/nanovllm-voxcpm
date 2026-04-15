@@ -42,24 +42,48 @@ class Mp3Info(BaseModel):
 
 
 class LoRAInfo(BaseModel):
-    """LoRA startup configuration and load status."""
+    """Runtime LoRA registration state."""
 
-    lora_uri: str | None = Field(
-        None,
-        description="LoRA artifact URI (if configured).",
-        examples=["hf://org/repo@main?path=step_0002000"],
-    )
-    lora_id: str | None = Field(
-        None,
-        description="Logical LoRA ID associated with this instance.",
-        examples=["my-lora"],
-    )
-    cache_dir: str | None = Field(None, description="Cache directory used to resolve LoRA artifacts.")
+    enabled: bool = Field(..., description="Whether runtime LoRA capacity is enabled for this deployment instance.")
+    enable_lm: bool = Field(..., description="Whether LM LoRA capacity is enabled.")
+    enable_dit: bool = Field(..., description="Whether DiT LoRA capacity is enabled.")
+    enable_proj: bool = Field(..., description="Whether projection-layer LoRA capacity is enabled.")
+    max_loras: int | None = Field(None, description="Maximum concurrently resident LoRA adapters per layer.")
+    max_lora_rank: int | None = Field(None, description="Maximum supported LoRA rank per layer slot.")
+    target_modules_lm: list[str] = Field(default_factory=list, description="Enabled LM LoRA target modules.")
+    target_modules_dit: list[str] = Field(default_factory=list, description="Enabled DiT LoRA target modules.")
+    target_proj_modules: list[str] = Field(default_factory=list, description="Enabled projection LoRA target modules.")
+    registered_names: list[str] = Field(default_factory=list, description="Currently registered LoRA adapter names.")
     loaded: bool = Field(
         ...,
-        description="Whether LoRA weights have been loaded and enabled.",
+        description="Whether at least one LoRA adapter is currently registered.",
         examples=[False],
     )
+
+
+class RegisteredLoRA(BaseModel):
+    """Registered LoRA adapter metadata."""
+
+    name: str = Field(..., description="Logical LoRA adapter name.", examples=["demo-lora"])
+
+
+class RegisterLoRARequest(BaseModel):
+    """Request body for POST /loras."""
+
+    name: str = Field(..., description="Logical LoRA adapter name.", examples=["demo-lora"])
+    path: str = Field(..., description="Filesystem path to the LoRA checkpoint directory.")
+
+
+class RegisterLoRAResponse(BaseModel):
+    """Response body for POST /loras."""
+
+    name: str = Field(..., description="Registered LoRA adapter name.")
+
+
+class UnregisterLoRAResponse(BaseModel):
+    """Response body for DELETE /loras/{name}."""
+
+    name: str = Field(..., description="Unregistered LoRA adapter name.")
 
 
 class InfoResponse(BaseModel):
@@ -142,6 +166,7 @@ class GenerateRequest(BaseModel):
         None,
         description="(reference audio) Base64-encoded float32 bytes returned by /encode_latents.",
     )
+    lora_name: str | None = Field(None, description="Registered LoRA adapter name to apply for this request.")
 
     max_generate_length: int = Field(2000, ge=1, description="Maximum number of model generation steps.")
     temperature: float = Field(1.0, ge=0.0, description="Sampling temperature.")

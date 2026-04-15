@@ -4,6 +4,11 @@ import os
 from dataclasses import dataclass
 
 
+ALL_LINEAR_LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
+VOXCPM_PROJ_LORA_TARGETS = ("enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj")
+VOXCPM2_PROJ_LORA_TARGETS = (*VOXCPM_PROJ_LORA_TARGETS, "fusion_concat_proj")
+
+
 def _get_int_env(name: str, default: int) -> int:
     v = os.environ.get(name)
     if v is None or v == "":
@@ -56,6 +61,17 @@ def _get_int_list_env(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(out)
 
 
+def _get_str_list_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+
+    parts = tuple(p.strip() for p in v.split(",") if p.strip() != "")
+    if len(parts) == 0:
+        raise RuntimeError(f"Invalid env {name}={v!r}; expected comma-separated strings")
+    return parts
+
+
 @dataclass(frozen=True)
 class Mp3Config:
     bitrate_kbps: int
@@ -73,10 +89,35 @@ class ServerPoolStartupConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeLoRAConfig:
+    enable_lm: bool | None
+    enable_dit: bool | None
+    enable_proj: bool | None
+    max_loras: int
+    max_lora_rank: int
+    target_modules_lm: tuple[str, ...] | None
+    target_modules_dit: tuple[str, ...] | None
+    target_proj_modules: tuple[str, ...] | None
+
+
+@dataclass(frozen=True)
+class MaterializedRuntimeLoRAConfig:
+    enable_lm: bool
+    enable_dit: bool
+    enable_proj: bool
+    max_loras: int
+    max_lora_rank: int
+    target_modules_lm: tuple[str, ...]
+    target_modules_dit: tuple[str, ...]
+    target_proj_modules: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     model_path: str
     mp3: Mp3Config
     server_pool: ServerPoolStartupConfig
+    lora: RuntimeLoRAConfig | None
 
 
 def load_config() -> ServiceConfig:
@@ -95,7 +136,37 @@ def load_config() -> ServiceConfig:
 
     if lora_uri or lora_id or lora_sha256:
         raise RuntimeError(
-            "LoRA startup preload env vars were removed; use the new per-request LoRA API when available"
+            "LoRA startup preload env vars were removed; use the runtime LoRA API with NANOVLLM_LORA_ENABLED=true"
+        )
+
+    runtime_lora_enabled = _get_bool_env("NANOVLLM_LORA_ENABLED", False)
+    runtime_lora_config: RuntimeLoRAConfig | None = None
+    if runtime_lora_enabled:
+        lora_max_loras = _get_int_env("NANOVLLM_LORA_MAX_LORAS", 1)
+        lora_max_lora_rank = _get_int_env("NANOVLLM_LORA_MAX_LORA_RANK", 32)
+        lora_enable_lm = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_LM")
+        lora_enable_dit = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_DIT")
+        lora_enable_proj = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_PROJ")
+        target_modules_lm = _get_optional_str_list_env("NANOVLLM_LORA_TARGET_MODULES_LM")
+        target_modules_dit = _get_optional_str_list_env("NANOVLLM_LORA_TARGET_MODULES_DIT")
+        target_proj_modules = _get_optional_str_list_env("NANOVLLM_LORA_TARGET_PROJ_MODULES")
+
+        if lora_max_loras <= 0:
+            raise RuntimeError("NANOVLLM_LORA_MAX_LORAS must be > 0")
+        if lora_max_lora_rank <= 0:
+            raise RuntimeError("NANOVLLM_LORA_MAX_LORA_RANK must be > 0")
+        if lora_enable_lm is False and lora_enable_dit is False and lora_enable_proj is False:
+            raise RuntimeError("At least one of NANOVLLM_LORA_ENABLE_LM/DIT/PROJ must be true")
+
+        runtime_lora_config = RuntimeLoRAConfig(
+            enable_lm=lora_enable_lm,
+            enable_dit=lora_enable_dit,
+            enable_proj=lora_enable_proj,
+            max_loras=lora_max_loras,
+            max_lora_rank=lora_max_lora_rank,
+            target_modules_lm=target_modules_lm,
+            target_modules_dit=target_modules_dit,
+            target_proj_modules=target_proj_modules,
         )
 
     # Server pool startup config (read at startup).
@@ -130,4 +201,41 @@ def load_config() -> ServiceConfig:
             enforce_eager=pool_enforce_eager,
             devices=pool_devices,
         ),
+        lora=runtime_lora_config,
+    )
+
+
+def _get_optional_bool_env(name: str) -> bool | None:
+    if os.environ.get(name) in (None, ""):
+        return None
+    return _get_bool_env(name, False)
+
+
+def _get_optional_str_list_env(name: str) -> tuple[str, ...] | None:
+    if os.environ.get(name) in (None, ""):
+        return None
+    return _get_str_list_env(name, ())
+
+
+def materialize_lora_config(config: RuntimeLoRAConfig, architecture: str) -> MaterializedRuntimeLoRAConfig:
+    if architecture == "voxcpm":
+        default_proj_targets = VOXCPM_PROJ_LORA_TARGETS
+    elif architecture == "voxcpm2":
+        default_proj_targets = VOXCPM2_PROJ_LORA_TARGETS
+    else:
+        raise RuntimeError(f"Unsupported model architecture for runtime LoRA: {architecture}")
+
+    enable_lm = True if config.enable_lm is None else config.enable_lm
+    enable_dit = True if config.enable_dit is None else config.enable_dit
+    enable_proj = True if config.enable_proj is None else config.enable_proj
+
+    return MaterializedRuntimeLoRAConfig(
+        enable_lm=enable_lm,
+        enable_dit=enable_dit,
+        enable_proj=enable_proj,
+        max_loras=config.max_loras,
+        max_lora_rank=config.max_lora_rank,
+        target_modules_lm=config.target_modules_lm or ALL_LINEAR_LORA_TARGETS,
+        target_modules_dit=config.target_modules_dit or ALL_LINEAR_LORA_TARGETS,
+        target_proj_modules=config.target_proj_modules or default_proj_targets,
     )

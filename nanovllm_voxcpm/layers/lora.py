@@ -59,26 +59,17 @@ class _LoRALayerBase(nn.Module):
     lora_scaling: torch.Tensor
     effective_lora_rank: torch.Tensor
 
-    def __init__(self, max_loras: int, max_lora_rank: int, default_rank: int, default_alpha: float):
+    def __init__(self, max_loras: int, max_lora_rank: int, supports_lora: bool):
         super().__init__()
         self.max_loras = max_loras
         self.max_lora_rank = max_lora_rank
-        self.lora_r = default_rank
-        self._base_lora_alpha = default_alpha
-        base_scaling = default_alpha / default_rank if default_rank > 0 else 0.0
+        self.supports_lora = supports_lora
         self.register_buffer("lora_scaling", torch.zeros(max_loras), persistent=False)
         self.register_buffer("lora_base_scaling", torch.zeros(max_loras), persistent=False)
         self.register_buffer("effective_lora_rank", torch.zeros(max_loras, dtype=torch.int32), persistent=False)
         self._lora_scaling_values = [0.0 for _ in range(max_loras)]
         self._lora_base_scaling_values = [0.0 for _ in range(max_loras)]
         self._effective_lora_rank_values = [0 for _ in range(max_loras)]
-        if default_rank > 0:
-            self.lora_scaling[0] = base_scaling
-            self.lora_base_scaling[0] = base_scaling
-            self.effective_lora_rank[0] = default_rank
-            self._lora_scaling_values[0] = base_scaling
-            self._lora_base_scaling_values[0] = base_scaling
-            self._effective_lora_rank_values[0] = default_rank
 
     def _active_rank(self, slot_id: int) -> int:
         return self._effective_lora_rank_values[slot_id]
@@ -87,7 +78,7 @@ class _LoRALayerBase(nn.Module):
         return self._lora_scaling_values[slot_id]
 
     def _resolve_token_slots(self, x_flat: torch.Tensor) -> torch.Tensor | None:
-        if self.lora_r <= 0:
+        if not self.supports_lora:
             return None
         context = get_lora_context()
         if context.token_to_slot is not None:
@@ -135,7 +126,7 @@ class _LoRALayerBase(nn.Module):
             raise ValueError(f"effective_rank={effective_rank} exceeds max_lora_rank={self.max_lora_rank}")
 
     def _validate_common_slot_payload(self, effective_rank: int, scaling: float) -> None:
-        if self.lora_r <= 0:
+        if not self.supports_lora:
             raise ValueError(f"{self.__class__.__name__} does not enable LoRA")
         if effective_rank <= 0:
             raise ValueError(f"effective_rank must be > 0, got {effective_rank}")
@@ -161,7 +152,7 @@ class _LoRALayerBase(nn.Module):
 
     @property
     def lora_enabled(self) -> bool:
-        return self.lora_r > 0 and self._slot_scaling(0) != 0.0
+        return self.supports_lora
 
     def set_slot_lora(
         self,
@@ -194,16 +185,14 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         total_num_heads: int,
         total_num_kv_heads: int,
         bias: bool = False,
-        lora_r: int = 0,
-        lora_alpha: float = 16.0,
         lora_targets: Optional[list[str]] = None,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
     ):
-        max_lora_rank = max_lora_rank or lora_r
-        super().__init__(
-            max_loras=max_loras, max_lora_rank=max_lora_rank, default_rank=lora_r, default_alpha=lora_alpha
-        )
+        resolved_max_lora_rank = max_lora_rank or 0
+        resolved_lora_targets = lora_targets or ["q", "k", "v"]
+        supports_lora = resolved_max_lora_rank > 0 and len(resolved_lora_targets) > 0
+        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.hidden_size = hidden_size
@@ -224,21 +213,19 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         else:
             self.register_parameter("bias", None)
 
-        self.lora_targets = lora_targets or ["q", "k", "v"]
+        self.lora_targets = resolved_lora_targets
         self.target_to_index = {target: idx for idx, target in enumerate(self.lora_targets)}
-        if lora_r > 0 and self.lora_targets:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), max_lora_rank, hidden_size))
+        if self.supports_lora:
+            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), self.max_lora_rank, hidden_size))
             if "q" in self.lora_targets:
-                self.lora_B_q = nn.Parameter(torch.zeros(max_loras, self.q_size, max_lora_rank))
+                self.lora_B_q = nn.Parameter(torch.zeros(max_loras, self.q_size, self.max_lora_rank))
                 set_weight_loader(self.lora_B_q, self._make_lora_b_weight_loader("q"))
             if "k" in self.lora_targets:
-                self.lora_B_k = nn.Parameter(torch.zeros(max_loras, self.kv_size, max_lora_rank))
+                self.lora_B_k = nn.Parameter(torch.zeros(max_loras, self.kv_size, self.max_lora_rank))
                 set_weight_loader(self.lora_B_k, self._make_lora_b_weight_loader("k"))
             if "v" in self.lora_targets:
-                self.lora_B_v = nn.Parameter(torch.zeros(max_loras, self.kv_size, max_lora_rank))
+                self.lora_B_v = nn.Parameter(torch.zeros(max_loras, self.kv_size, self.max_lora_rank))
                 set_weight_loader(self.lora_B_v, self._make_lora_b_weight_loader("v"))
-        else:
-            self.lora_r = 0
 
     def _base_weight_loader(
         self,
@@ -279,12 +266,6 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         self.lora_A.data[0, target_idx, : loaded_weight.size(0)].copy_(loaded_weight)
         self.effective_lora_rank[0] = loaded_weight.size(0)
         self._effective_lora_rank_values[0] = loaded_weight.size(0)
-        if loaded_weight.size(0) > 0:
-            self.lora_base_scaling[0] = self._base_lora_alpha / loaded_weight.size(0)
-            self._lora_base_scaling_values[0] = self._base_lora_alpha / loaded_weight.size(0)
-            if self.lora_enabled:
-                self.lora_scaling[0] = self.lora_base_scaling[0]
-                self._lora_scaling_values[0] = self._lora_base_scaling_values[0]
 
     def _apply_target(
         self, x_flat: torch.Tensor, output: torch.Tensor, token_to_slot: torch.Tensor, target: str
@@ -383,7 +364,7 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
                 )
 
     def reset_lora_parameters(self):
-        if self.lora_r <= 0:
+        if not self.supports_lora:
             return
         self.lora_A.data.zero_()
         for target in self.lora_targets:
@@ -396,16 +377,14 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         input_size: int,
         output_sizes: list[int],
         bias: bool = False,
-        lora_r: int = 0,
-        lora_alpha: float = 16.0,
         lora_targets: Optional[list[int]] = None,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
     ):
-        max_lora_rank = max_lora_rank or lora_r
-        super().__init__(
-            max_loras=max_loras, max_lora_rank=max_lora_rank, default_rank=lora_r, default_alpha=lora_alpha
-        )
+        resolved_max_lora_rank = max_lora_rank or 0
+        resolved_lora_targets = lora_targets if lora_targets is not None else list(range(len(output_sizes)))
+        supports_lora = resolved_max_lora_rank > 0 and len(resolved_lora_targets) > 0
+        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.output_sizes = output_sizes
@@ -422,16 +401,14 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         else:
             self.register_parameter("bias", None)
 
-        self.lora_targets = lora_targets if lora_targets is not None else list(range(len(output_sizes)))
+        self.lora_targets = resolved_lora_targets
         self.target_to_index = {target: idx for idx, target in enumerate(self.lora_targets)}
-        if lora_r > 0 and self.lora_targets:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), max_lora_rank, input_size))
+        if self.supports_lora:
+            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), self.max_lora_rank, input_size))
             for target_idx in self.lora_targets:
-                lora_b = nn.Parameter(torch.zeros(max_loras, self.shard_output_sizes[target_idx], max_lora_rank))
+                lora_b = nn.Parameter(torch.zeros(max_loras, self.shard_output_sizes[target_idx], self.max_lora_rank))
                 set_weight_loader(lora_b, self._make_lora_b_weight_loader(target_idx))
                 setattr(self, f"lora_B_{target_idx}", lora_b)
-        else:
-            self.lora_r = 0
 
     def _base_weight_loader(
         self,
@@ -465,12 +442,6 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         self.lora_A.data[0, fused_idx, : loaded_weight.size(0)].copy_(loaded_weight)
         self.effective_lora_rank[0] = loaded_weight.size(0)
         self._effective_lora_rank_values[0] = loaded_weight.size(0)
-        if loaded_weight.size(0) > 0:
-            self.lora_base_scaling[0] = self._base_lora_alpha / loaded_weight.size(0)
-            self._lora_base_scaling_values[0] = self._base_lora_alpha / loaded_weight.size(0)
-            if self.lora_enabled:
-                self.lora_scaling[0] = self.lora_base_scaling[0]
-                self._lora_scaling_values[0] = self._lora_base_scaling_values[0]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         result = F.linear(x, self.weight, self.bias)
@@ -521,7 +492,7 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         self._lora_base_scaling_values[slot_id] = scaling
 
     def reset_lora_parameters(self):
-        if self.lora_r <= 0:
+        if not self.supports_lora:
             return
         self.lora_A.data.zero_()
         for target_idx in self.lora_targets:
@@ -565,15 +536,12 @@ class LoRARowParallelLinear(_LoRALayerBase):
         input_size: int,
         output_size: int,
         bias: bool = False,
-        lora_r: int = 0,
-        lora_alpha: float = 16.0,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
     ):
-        max_lora_rank = max_lora_rank or lora_r
-        super().__init__(
-            max_loras=max_loras, max_lora_rank=max_lora_rank, default_rank=lora_r, default_alpha=lora_alpha
-        )
+        resolved_max_lora_rank = max_lora_rank or 0
+        supports_lora = resolved_max_lora_rank > 0
+        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.input_size = input_size
@@ -588,12 +556,10 @@ class LoRARowParallelLinear(_LoRALayerBase):
         else:
             self.register_parameter("bias", None)
 
-        if lora_r > 0:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, max_lora_rank, self.shard_input_size))
+        if self.supports_lora:
+            self.lora_A = nn.Parameter(torch.zeros(max_loras, self.max_lora_rank, self.shard_input_size))
             set_weight_loader(self.lora_A, self._lora_a_weight_loader)
-            self.lora_B = nn.Parameter(torch.zeros(max_loras, output_size, max_lora_rank))
-        else:
-            self.lora_r = 0
+            self.lora_B = nn.Parameter(torch.zeros(max_loras, output_size, self.max_lora_rank))
 
     def _base_weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         if param.dim() == 2:
@@ -653,7 +619,7 @@ class LoRARowParallelLinear(_LoRALayerBase):
         self._lora_base_scaling_values[slot_id] = scaling
 
     def reset_lora_parameters(self):
-        if self.lora_r > 0:
+        if self.supports_lora:
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
 
@@ -687,15 +653,12 @@ class LoRALinear(_LoRALayerBase):
         in_features: int,
         out_features: int,
         bias: bool = True,
-        lora_r: int = 0,
-        lora_alpha: float = 16.0,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
     ):
-        max_lora_rank = max_lora_rank or lora_r
-        super().__init__(
-            max_loras=max_loras, max_lora_rank=max_lora_rank, default_rank=lora_r, default_alpha=lora_alpha
-        )
+        resolved_max_lora_rank = max_lora_rank or 0
+        supports_lora = resolved_max_lora_rank > 0
+        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
         self.in_features = in_features
         self.out_features = out_features
 
@@ -705,11 +668,9 @@ class LoRALinear(_LoRALayerBase):
         else:
             self.register_parameter("bias", None)
 
-        if lora_r > 0:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, max_lora_rank, in_features))
-            self.lora_B = nn.Parameter(torch.zeros(max_loras, out_features, max_lora_rank))
-        else:
-            self.lora_r = 0
+        if self.supports_lora:
+            self.lora_A = nn.Parameter(torch.zeros(max_loras, self.max_lora_rank, in_features))
+            self.lora_B = nn.Parameter(torch.zeros(max_loras, out_features, self.max_lora_rank))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight, self.bias)
@@ -752,7 +713,7 @@ class LoRALinear(_LoRALayerBase):
         self._lora_base_scaling_values[slot_id] = scaling
 
     def reset_lora_parameters(self):
-        if self.lora_r > 0:
+        if self.supports_lora:
             self.lora_A.data.zero_()
             self.lora_B.data.zero_()
 
@@ -785,7 +746,7 @@ def iter_lora_modules(model: nn.Module):
         if isinstance(
             module, (LoRAQKVParallelLinear, LoRAMergedColumnParallelLinear, LoRARowParallelLinear, LoRALinear)
         ):
-            if module.lora_r > 0:
+            if module.lora_enabled:
                 yield module
 
 

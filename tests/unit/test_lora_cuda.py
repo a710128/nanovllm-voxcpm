@@ -55,7 +55,7 @@ def test_lora_linear_cuda_modes_and_rank_alpha():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.utils.context import set_lora_context
 
-    layer = LoRALinear(in_features=3, out_features=2, bias=False, lora_r=2, max_loras=2, max_lora_rank=4).cuda()
+    layer = LoRALinear(in_features=3, out_features=2, bias=False, max_loras=2, max_lora_rank=4).cuda()
     with torch.no_grad():
         layer.weight.zero_()
         layer.set_slot_lora(
@@ -112,7 +112,7 @@ def test_lora_linear_cuda_graph_replay():
     from nanovllm_voxcpm.utils.context import set_lora_context
 
     set_backend_for_testing(_VendoredTritonPunicaBackend())
-    layer = LoRALinear(in_features=2, out_features=1, bias=False, lora_r=1, max_loras=2, max_lora_rank=1).cuda()
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=2, max_lora_rank=1).cuda()
     with torch.no_grad():
         layer.weight.zero_()
         layer.set_slot_lora(
@@ -177,7 +177,7 @@ def test_lora_linear_triton_lora_b_pointer_cache_stays_bounded():
     set_backend_for_testing(_VendoredTritonPunicaBackend())
     lora_utils._LORA_A_PTR_DICT.clear()
     lora_utils._LORA_B_PTR_DICT.clear()
-    layer = LoRALinear(in_features=2, out_features=1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1).cuda().half()
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=1, max_lora_rank=1).cuda().half()
     with torch.no_grad():
         layer.weight.zero_()
         layer.set_slot_lora(
@@ -218,7 +218,6 @@ def test_lora_merged_column_set_slot_applies_scaling_once():
             input_size=2,
             output_sizes=[1, 1],
             bias=False,
-            lora_r=1,
             lora_targets=[0],
             max_loras=1,
             max_lora_rank=1,
@@ -263,8 +262,6 @@ def _make_tp2_qkv_layer(rank: int):
         total_num_heads=2,
         total_num_kv_heads=2,
         bias=False,
-        lora_r=1,
-        lora_alpha=1.0,
         max_loras=2,
         max_lora_rank=1,
     ).cuda()

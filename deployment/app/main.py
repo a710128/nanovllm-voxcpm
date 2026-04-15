@@ -21,6 +21,7 @@ def create_app() -> FastAPI:
             {"name": "health", "description": "Liveness and readiness probes."},
             {"name": "info", "description": "Model and instance metadata."},
             {"name": "metrics", "description": "Prometheus metrics."},
+            {"name": "lora", "description": "Runtime LoRA adapter management."},
             {
                 "name": "latents",
                 "description": "Encode prompt audio to prompt latents.",

@@ -1,20 +1,42 @@
 from __future__ import annotations
 
+import json
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from huggingface_hub import snapshot_download
 
 from nanovllm_voxcpm.llm import VoxCPM
 
-from app.core.config import ServiceConfig
+from app.core.config import ServiceConfig, materialize_lora_config
 
 SERVER_FACTORY = VoxCPM.from_pretrained
+
+
+def _read_model_architecture(model_path: str) -> str:
+    resolved_model_path = os.path.expanduser(model_path)
+    if not os.path.isdir(resolved_model_path):
+        resolved_model_path = snapshot_download(repo_id=model_path)
+    config_file = os.path.join(resolved_model_path, "config.json")
+    if not os.path.isfile(config_file):
+        raise FileNotFoundError(f"Config file `{config_file}` not found")
+    with open(config_file, encoding="utf-8") as f:
+        config = json.load(f)
+    architecture = config.get("architecture")
+    if not isinstance(architecture, str) or architecture == "":
+        raise RuntimeError(f"Config file `{config_file}` must define architecture")
+    return architecture
 
 
 def build_lifespan(cfg: ServiceConfig):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        lora_config = None
+        if cfg.lora is not None:
+            lora_config = materialize_lora_config(cfg.lora, _read_model_architecture(cfg.model_path))
+
         server = SERVER_FACTORY(
             model=cfg.model_path,
             max_num_batched_tokens=cfg.server_pool.max_num_batched_tokens,
@@ -23,7 +45,7 @@ def build_lifespan(cfg: ServiceConfig):
             gpu_memory_utilization=cfg.server_pool.gpu_memory_utilization,
             enforce_eager=cfg.server_pool.enforce_eager,
             devices=list(cfg.server_pool.devices),
-            lora_config=None,
+            lora_config=lora_config,
         )
         app.state.server = server
         app.state.ready = False

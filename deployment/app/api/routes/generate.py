@@ -130,6 +130,11 @@ async def generate(
     if channels != 1:
         raise HTTPException(status_code=500, detail=f"Only mono is supported (channels={channels})")
 
+    if req.lora_name is not None:
+        registered_loras = {str(item["name"]) for item in await server.list_loras()}
+        if req.lora_name not in registered_loras:
+            raise HTTPException(status_code=400, detail=f"LoRA '{req.lora_name}' is not registered")
+
     prompt_latents: bytes | None = None
     ref_audio_latents: bytes | None = None
     prompt_text = ""
@@ -168,6 +173,7 @@ async def generate(
             "max_generate_length": req.max_generate_length,
             "temperature": req.temperature,
             "cfg_value": req.cfg_value,
+            "lora_name": req.lora_name,
         }
         if ref_audio_latents is not None:
             generate_kwargs["ref_audio_latents"] = ref_audio_latents
@@ -181,9 +187,12 @@ async def generate(
                 status_code=400, detail=f"Reference audio is not supported by the loaded model: {e}"
             ) from e
 
-        async for chunk in stream:
-            GENERATE_AUDIO_SECONDS_TOTAL.inc(float(chunk.shape[0]) / float(sample_rate))
-            yield chunk
+        try:
+            async for chunk in stream:
+                GENERATE_AUDIO_SECONDS_TOTAL.inc(float(chunk.shape[0]) / float(sample_rate))
+                yield chunk
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     async def body() -> AsyncIterator[bytes]:
         nonlocal ttfb_recorded

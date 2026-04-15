@@ -36,6 +36,28 @@ def test_info_returns_503_when_server_missing(app):
         assert r.json() == {"detail": "Model server not ready"}
 
 
+def test_loras_returns_503_when_server_missing(app):
+    with TestClient(app) as client:
+        delattr(client.app.state, "server")
+        r = client.get("/loras")
+        assert r.status_code == 503
+        assert r.json() == {"detail": "Model server not ready"}
+
+
+def test_lora_endpoints_validate_registration_errors(app):
+    with TestClient(app) as client:
+        r = client.delete("/loras/missing")
+        assert r.status_code == 400
+        assert "not registered" in r.json()["detail"]
+
+        r = client.post("/loras", json={"name": "demo", "path": "/tmp/demo"})
+        assert r.status_code == 200
+
+        r = client.post("/loras", json={"name": "demo", "path": "/tmp/demo"})
+        assert r.status_code == 400
+        assert "already registered" in r.json()["detail"]
+
+
 def test_generate_rejects_mutually_exclusive_prompt_wav_and_latents_400(app):
     wav_b64 = base64.b64encode(b"FAKEWAV").decode("utf-8")
     latents_b64 = base64.b64encode(b"LATENTS").decode("utf-8")
@@ -128,6 +150,13 @@ def test_generate_returns_500_if_cfg_missing(app):
         r = client.post("/generate", json={"target_text": "hi"})
         assert r.status_code == 500
         assert "missing app.state.cfg" in r.json()["detail"]
+
+
+def test_generate_rejects_unknown_lora_name_400(app):
+    with TestClient(app) as client:
+        r = client.post("/generate", json={"target_text": "hi", "lora_name": "missing"})
+        assert r.status_code == 400
+        assert "not registered" in r.json()["detail"]
 
 
 def test_generate_returns_500_if_channels_not_mono(app, monkeypatch):

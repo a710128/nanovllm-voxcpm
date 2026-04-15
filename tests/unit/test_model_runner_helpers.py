@@ -147,7 +147,7 @@ def test_validate_lora_payload_rejects_unknown_module():
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.rank = 0
     runner.model = nn.Module()
-    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1))
+    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=1))
 
     payload = LoRAModelPayload(
         modules={
@@ -176,7 +176,7 @@ def test_validate_lora_payload_rejects_invalid_linear_shape():
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.rank = 0
     runner.model = nn.Module()
-    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1))
+    runner.model.add_module("linear", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=1))
 
     payload = LoRAModelPayload(
         modules={
@@ -213,7 +213,6 @@ def test_validate_lora_payload_rejects_qkv_target_count_mismatch():
             total_num_heads=2,
             total_num_kv_heads=2,
             bias=False,
-            lora_r=1,
             max_loras=1,
             max_lora_rank=1,
         ),
@@ -292,7 +291,7 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank0.max_loras = 1
     rank0.lora_runtime = LoRARuntime(max_loras=1, max_lora_rank=2)
     rank0.model = nn.Module()
-    rank0.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
+    rank0.model.add_module("linear", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=2))
     rank0.exit = lambda: None
     rank0.shm = SharedMemory(create=True, size=1024)
 
@@ -304,7 +303,7 @@ def test_tp2_register_lora_uses_rank_local_payload_and_runner_manager(monkeypatc
     rank1.max_loras = 1
     rank1.lora_runtime = LoRARuntime(max_loras=1, max_lora_rank=2)
     rank1.model = nn.Module()
-    rank1.model.add_module("linear", LoRALinear(2, 1, bias=False, lora_r=1, max_loras=1, max_lora_rank=2))
+    rank1.model.add_module("linear", LoRALinear(2, 1, bias=False, max_loras=1, max_lora_rank=2))
     rank1.exit = lambda: None
     rank1.shm = SharedMemory(name=rank0.shm.name)
 

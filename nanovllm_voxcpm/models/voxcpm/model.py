@@ -202,24 +202,19 @@ class Cpm4Attention(nn.Module):
         self.apply_qk_norm = apply_qk_norm
         self.is_causal = is_causal
 
-        # Determine LoRA parameters for attention projections
-        lora_r = lora_config.r if lora_config else 0
-        lora_alpha = lora_config.alpha if lora_config else 16.0
         max_loras = lora_config.max_loras if lora_config else 1
-        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
+        max_lora_rank = lora_config.max_lora_rank if lora_config else 0
         lora_targets = lora_config.target_modules_lm if lora_config else []
 
         # QKV projection with optional LoRA
         qkv_lora_targets = [t.replace("_proj", "") for t in lora_targets if t in ["q_proj", "k_proj", "v_proj"]]
-        if lora_r > 0 and qkv_lora_targets:
+        if max_lora_rank > 0 and qkv_lora_targets:
             self.qkv_proj = LoRAQKVParallelLinear(
                 hidden_size,
                 self.head_dim,
                 self.total_num_heads,
                 self.total_num_kv_heads,
                 bias=qkv_bias,
-                lora_r=lora_r,
-                lora_alpha=lora_alpha,
                 lora_targets=qkv_lora_targets,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
@@ -234,13 +229,11 @@ class Cpm4Attention(nn.Module):
             )
 
         # O projection with optional LoRA
-        if lora_r > 0 and "o_proj" in lora_targets:
+        if max_lora_rank > 0 and "o_proj" in lora_targets:
             self.o_proj = LoRARowParallelLinear(
                 self.total_num_heads * self.head_dim,
                 hidden_size,
                 bias=qkv_bias,
-                lora_r=lora_r,
-                lora_alpha=lora_alpha,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
             )
@@ -336,11 +329,8 @@ class Cpm4MLP(nn.Module):
     ) -> None:
         super().__init__()
 
-        # Determine LoRA parameters for MLP projections
-        lora_r = lora_config.r if lora_config else 0
-        lora_alpha = lora_config.alpha if lora_config else 16.0
         max_loras = lora_config.max_loras if lora_config else 1
-        max_lora_rank = lora_config.max_lora_rank if lora_config else lora_r
+        max_lora_rank = lora_config.max_lora_rank if lora_config else 0
         lora_targets = lora_config.target_modules_lm if lora_config else []
 
         # gate_up_proj with optional LoRA
@@ -350,13 +340,11 @@ class Cpm4MLP(nn.Module):
         if "up_proj" in lora_targets:
             gate_up_lora_targets.append(1)
 
-        if lora_r > 0 and gate_up_lora_targets:
+        if max_lora_rank > 0 and gate_up_lora_targets:
             self.gate_up_proj = LoRAMergedColumnParallelLinear(
                 hidden_size,
                 [intermediate_size] * 2,
                 bias=False,
-                lora_r=lora_r,
-                lora_alpha=lora_alpha,
                 lora_targets=gate_up_lora_targets,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
@@ -369,13 +357,11 @@ class Cpm4MLP(nn.Module):
             )
 
         # down_proj with optional LoRA
-        if lora_r > 0 and "down_proj" in lora_targets:
+        if max_lora_rank > 0 and "down_proj" in lora_targets:
             self.down_proj = LoRARowParallelLinear(
                 intermediate_size,
                 hidden_size,
                 bias=False,
-                lora_r=lora_r,
-                lora_alpha=lora_alpha,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
             )
@@ -561,8 +547,6 @@ class VoxCPMLocDiT(nn.Module):
             dit_lora_config = LoRAConfig(
                 enable_lm=True,  # Use the same mechanism
                 enable_dit=False,
-                r=lora_config.r,
-                alpha=lora_config.alpha,
                 max_loras=lora_config.max_loras,
                 max_lora_rank=lora_config.max_lora_rank,
                 target_modules_lm=lora_config.target_modules_dit,  # Use DiT targets
@@ -842,20 +826,16 @@ class VoxCPMModel(nn.Module):
             config.scalar_quantization_scale,
         )
 
-        # Determine LoRA config for projection layers
-        proj_lora_r = lora_config.r if (lora_config and lora_config.enable_proj) else 0
-        proj_lora_alpha = lora_config.alpha if lora_config else 16.0
+        proj_lora_enabled = bool(lora_config and lora_config.enable_proj)
         proj_max_loras = lora_config.max_loras if lora_config else 1
-        proj_max_lora_rank = lora_config.max_lora_rank if lora_config else proj_lora_r
+        proj_max_lora_rank = lora_config.max_lora_rank if lora_config else 0
         proj_targets = lora_config.target_proj_modules if lora_config else []
 
         # enc_to_lm_proj
-        if proj_lora_r > 0 and "enc_to_lm_proj" in proj_targets:
+        if proj_lora_enabled and proj_max_lora_rank > 0 and "enc_to_lm_proj" in proj_targets:
             self.enc_to_lm_proj = LoRALinear(
                 config.encoder_config.hidden_dim,
                 config.lm_config.hidden_size,
-                lora_r=proj_lora_r,
-                lora_alpha=proj_lora_alpha,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
             )
@@ -863,12 +843,10 @@ class VoxCPMModel(nn.Module):
             self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
 
         # lm_to_dit_proj
-        if proj_lora_r > 0 and "lm_to_dit_proj" in proj_targets:
+        if proj_lora_enabled and proj_max_lora_rank > 0 and "lm_to_dit_proj" in proj_targets:
             self.lm_to_dit_proj = LoRALinear(
                 config.lm_config.hidden_size,
                 config.dit_config.hidden_dim,
-                lora_r=proj_lora_r,
-                lora_alpha=proj_lora_alpha,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
             )
@@ -876,12 +854,10 @@ class VoxCPMModel(nn.Module):
             self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
 
         # res_to_dit_proj
-        if proj_lora_r > 0 and "res_to_dit_proj" in proj_targets:
+        if proj_lora_enabled and proj_max_lora_rank > 0 and "res_to_dit_proj" in proj_targets:
             self.res_to_dit_proj = LoRALinear(
                 config.lm_config.hidden_size,
                 config.dit_config.hidden_dim,
-                lora_r=proj_lora_r,
-                lora_alpha=proj_lora_alpha,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
             )

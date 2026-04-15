@@ -43,7 +43,7 @@ def test_lora_linear_context_controls_activation_and_reset():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
 
-    layer = LoRALinear(in_features=4, out_features=3, bias=False, lora_r=2, lora_alpha=2.0)
+    layer = LoRALinear(in_features=4, out_features=3, bias=False, max_lora_rank=2)
     # Deterministic weights.
     with torch.no_grad():
         layer.weight.fill_(1.0)
@@ -97,9 +97,9 @@ def test_iter_lora_modules():
     )
 
     model = torch.nn.Sequential(
-        LoRALinear(4, 4, lora_r=2),
+        LoRALinear(4, 4, max_lora_rank=2),
         torch.nn.ReLU(),
-        LoRALinear(4, 4, lora_r=0),
+        LoRALinear(4, 4),
     )
     lora_modules = list(iter_lora_modules(model))
     assert len(lora_modules) == 1
@@ -110,7 +110,7 @@ def test_lora_linear_mixed_slots_with_runtime_context():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
 
-    layer = LoRALinear(in_features=3, out_features=2, bias=False, lora_r=2, max_loras=2, max_lora_rank=3)
+    layer = LoRALinear(in_features=3, out_features=2, bias=False, max_loras=2, max_lora_rank=3)
     with torch.no_grad():
         layer.weight.zero_()
         layer.set_slot_lora(
@@ -193,7 +193,7 @@ def test_no_lora_context_disables_all_slots():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
 
-    layer = LoRALinear(in_features=2, out_features=1, bias=False, lora_r=1, max_loras=2, max_lora_rank=1)
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=2, max_lora_rank=1)
     with torch.no_grad():
         layer.weight.zero_()
         layer.set_slot_lora(
@@ -228,7 +228,7 @@ def test_no_lora_context_disables_all_slots():
 def test_set_slot_lora_validates_max_rank():
     from nanovllm_voxcpm.layers.lora import LoRALinear
 
-    layer = LoRALinear(in_features=2, out_features=1, bias=False, lora_r=1, max_loras=1, max_lora_rank=1)
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=1, max_lora_rank=1)
     with pytest.raises(ValueError):
         layer.set_slot_lora(
             slot_id=0,
