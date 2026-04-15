@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, Request
 
 from app.api.deps import get_server
 from app.core.config import materialize_lora_config
-from app.core.lifespan import _read_model_architecture
 from app.schemas.http import ErrorResponse, InfoResponse, LoRAInfo, ModelInfo, Mp3Info
 
 router = APIRouter(tags=["info"])
@@ -29,9 +28,10 @@ async def info(request: Request, server: Any = Depends(get_server)) -> InfoRespo
     cfg = getattr(request.app.state, "cfg", None)
     model_info = await server.get_model_info()
     registered_loras = [str(item["name"]) for item in await server.list_loras()]
+    model_architecture = getattr(request.app.state, "model_architecture", None)
     lora_config = None
-    if getattr(cfg, "lora", None) is not None:
-        lora_config = materialize_lora_config(cfg.lora, _read_model_architecture(cfg.model_path))
+    if getattr(cfg, "lora", None) is not None and model_architecture is not None:
+        lora_config = materialize_lora_config(cfg.lora, model_architecture)
     return InfoResponse(
         model=ModelInfo(
             sample_rate=int(model_info["sample_rate"]),

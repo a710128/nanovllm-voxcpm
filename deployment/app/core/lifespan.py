@@ -33,9 +33,11 @@ def _read_model_architecture(model_path: str) -> str:
 def build_lifespan(cfg: ServiceConfig):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        model_architecture = None
         lora_config = None
         if cfg.lora is not None:
-            lora_config = materialize_lora_config(cfg.lora, _read_model_architecture(cfg.model_path))
+            model_architecture = _read_model_architecture(cfg.model_path)
+            lora_config = materialize_lora_config(cfg.lora, model_architecture)
 
         server = SERVER_FACTORY(
             model=cfg.model_path,
@@ -48,6 +50,7 @@ def build_lifespan(cfg: ServiceConfig):
             lora_config=lora_config,
         )
         app.state.server = server
+        app.state.model_architecture = model_architecture
         app.state.ready = False
 
         try:
@@ -60,5 +63,7 @@ def build_lifespan(cfg: ServiceConfig):
             await server.stop()
             if getattr(app.state, "server", None) is server:
                 delattr(app.state, "server")
+            if getattr(app.state, "model_architecture", None) is model_architecture:
+                delattr(app.state, "model_architecture")
 
     return lifespan

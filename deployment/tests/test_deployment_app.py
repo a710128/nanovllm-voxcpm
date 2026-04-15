@@ -153,6 +153,7 @@ def test_lifespan_resolves_repo_id_before_materializing_lora(monkeypatch, tmp_pa
 
 def test_info(app):
     with TestClient(app) as client:
+        assert client.app.state.model_architecture == "voxcpm"
         r = client.get("/info")
         assert r.status_code == 200
         body = r.json()
@@ -168,6 +169,31 @@ def test_info(app):
             "target_modules_lm": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             "target_modules_dit": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             "target_proj_modules": ["enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj"],
+            "registered_names": [],
+            "loaded": False,
+        }
+
+
+def test_info_reflects_runtime_lora_disable_without_reloading_model(app):
+    with TestClient(app) as client:
+        client.app.state.cfg = client.app.state.cfg.__class__(
+            model_path=client.app.state.cfg.model_path,
+            mp3=client.app.state.cfg.mp3,
+            server_pool=client.app.state.cfg.server_pool,
+            lora=None,
+        )
+        r = client.get("/info")
+        assert r.status_code == 200
+        assert r.json()["lora"] == {
+            "enabled": False,
+            "enable_lm": False,
+            "enable_dit": False,
+            "enable_proj": False,
+            "max_loras": None,
+            "max_lora_rank": None,
+            "target_modules_lm": [],
+            "target_modules_dit": [],
+            "target_proj_modules": [],
             "registered_names": [],
             "loaded": False,
         }
