@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import sys
 import types
@@ -58,3 +59,97 @@ def test_from_pretrained_uses_local_path_and_dispatches(
     assert isinstance(obj, SyncServerPool)
     assert obj.kwargs["model_path"] == str(model_dir)
     assert obj.kwargs["devices"] == [0]
+
+
+def test_from_pretrained_downloads_remote_model_and_uses_async_pool(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "flash_attn", types.ModuleType("flash_attn"))
+
+    downloaded_dir = tmp_path / "downloaded"
+    downloaded_dir.mkdir()
+    (downloaded_dir / "config.json").write_text(json.dumps({"architecture": "voxcpm2"}), encoding="utf-8")
+
+    hub = types.ModuleType("huggingface_hub")
+
+    def _snapshot_download(*, repo_id):
+        assert repo_id == "org/model"
+        return str(downloaded_dir)
+
+    setattr(cast(Any, hub), "snapshot_download", _snapshot_download)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+
+    server_mod = types.ModuleType("nanovllm_voxcpm.models.voxcpm2.server")
+
+    class SyncServerPool:  # pragma: no cover
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class AsyncServerPool:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    setattr(server_mod, "SyncVoxCPM2ServerPool", SyncServerPool)
+    setattr(server_mod, "AsyncVoxCPM2ServerPool", AsyncServerPool)
+    monkeypatch.setitem(sys.modules, "nanovllm_voxcpm.models.voxcpm2.server", server_mod)
+
+    pytest.importorskip("pydantic")
+
+    sys.modules.pop("nanovllm_voxcpm.llm", None)
+    llm = importlib.import_module("nanovllm_voxcpm.llm")
+
+    async def run():
+        return llm.VoxCPM.from_pretrained(model="org/model", devices=[3], extra_flag=True)
+
+    obj = asyncio.run(run())
+    assert isinstance(obj, AsyncServerPool)
+    assert obj.kwargs["model_path"] == str(downloaded_dir)
+    assert obj.kwargs["devices"] == [3]
+    assert obj.kwargs["extra_flag"] is True
+
+
+def test_from_pretrained_rejects_missing_tilde_path(monkeypatch):
+    monkeypatch.setitem(sys.modules, "flash_attn", types.ModuleType("flash_attn"))
+    hub = types.ModuleType("huggingface_hub")
+    setattr(cast(Any, hub), "snapshot_download", lambda **kwargs: None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    pytest.importorskip("pydantic")
+
+    sys.modules.pop("nanovllm_voxcpm.llm", None)
+    llm = importlib.import_module("nanovllm_voxcpm.llm")
+
+    with pytest.raises(ValueError, match="does not exist"):
+        llm.VoxCPM.from_pretrained(model="~/missing-model-dir")
+
+
+def test_from_pretrained_rejects_missing_config_file(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "flash_attn", types.ModuleType("flash_attn"))
+    hub = types.ModuleType("huggingface_hub")
+    setattr(cast(Any, hub), "snapshot_download", lambda **kwargs: None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    pytest.importorskip("pydantic")
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    sys.modules.pop("nanovllm_voxcpm.llm", None)
+    llm = importlib.import_module("nanovllm_voxcpm.llm")
+
+    with pytest.raises(FileNotFoundError, match="Config file"):
+        llm.VoxCPM.from_pretrained(model=str(model_dir))
+
+
+def test_from_pretrained_rejects_unsupported_architecture(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "flash_attn", types.ModuleType("flash_attn"))
+    hub = types.ModuleType("huggingface_hub")
+    setattr(cast(Any, hub), "snapshot_download", lambda **kwargs: None)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    pytest.importorskip("pydantic")
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(json.dumps({"architecture": "unknown"}), encoding="utf-8")
+
+    sys.modules.pop("nanovllm_voxcpm.llm", None)
+    llm = importlib.import_module("nanovllm_voxcpm.llm")
+
+    with pytest.raises(ValueError, match="Unsupported model architecture"):
+        llm.VoxCPM.from_pretrained(model=str(model_dir))

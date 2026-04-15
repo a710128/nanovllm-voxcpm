@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import time
 from typing import Any, AsyncIterator
 
@@ -162,30 +163,44 @@ async def generate(
     elif req.ref_audio_latents_base64 is not None:
         ref_audio_latents = _decode_latents_base64(req.ref_audio_latents_base64, "ref_audio_latents_base64", feat_dim)
 
+    generate_kwargs = {
+        "target_text": req.target_text,
+        "prompt_latents": prompt_latents,
+        "prompt_text": prompt_text,
+        "max_generate_length": req.max_generate_length,
+        "temperature": req.temperature,
+        "cfg_value": req.cfg_value,
+        "lora_name": req.lora_name,
+    }
+    if ref_audio_latents is not None:
+        generate_kwargs["ref_audio_latents"] = ref_audio_latents
+
+    if ref_audio_latents is not None:
+        generate_params = inspect.signature(server.generate).parameters
+        if "ref_audio_latents" not in generate_params:
+            raise HTTPException(status_code=400, detail="Reference audio is not supported by the loaded model")
+
+    stream = server.generate(**generate_kwargs)
+
+    first_chunk: NDArray[np.float32] | None = None
+    stream_exhausted = False
+    try:
+        first_chunk = await anext(stream)
+    except StopAsyncIteration:
+        stream_exhausted = True
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     start_t = time.perf_counter()
     ttfb_recorded = False
 
     async def wav_chunks() -> AsyncIterator[NDArray[np.float32]]:
-        generate_kwargs = {
-            "target_text": req.target_text,
-            "prompt_latents": prompt_latents,
-            "prompt_text": prompt_text,
-            "max_generate_length": req.max_generate_length,
-            "temperature": req.temperature,
-            "cfg_value": req.cfg_value,
-            "lora_name": req.lora_name,
-        }
-        if ref_audio_latents is not None:
-            generate_kwargs["ref_audio_latents"] = ref_audio_latents
+        if first_chunk is not None:
+            GENERATE_AUDIO_SECONDS_TOTAL.inc(float(first_chunk.shape[0]) / float(sample_rate))
+            yield first_chunk
 
-        try:
-            stream = server.generate(**generate_kwargs)
-        except TypeError as e:
-            if ref_audio_latents is None:
-                raise
-            raise HTTPException(
-                status_code=400, detail=f"Reference audio is not supported by the loaded model: {e}"
-            ) from e
+        if stream_exhausted:
+            return
 
         try:
             async for chunk in stream:

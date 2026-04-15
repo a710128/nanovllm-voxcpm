@@ -199,3 +199,212 @@ def test_scheduler_skips_blocked_adapter_and_admits_base_request(tmp_path):
     assert seqs == [base]
     assert blocked.status == SequenceStatus.WAITING
     assert base.status == SequenceStatus.RUNNING
+
+
+def test_scheduler_cancel_unknown_id_is_noop(tmp_path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=1024,
+        max_num_seqs=4,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=8,
+        tensor_parallel_size=1,
+    )
+    sched = Scheduler(cfg)
+
+    assert sched.cancel("missing") is None
+    assert sched.is_finished() is True
+
+
+def test_scheduler_respects_max_num_seqs_limit_during_prefill(tmp_path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+    from nanovllm_voxcpm.engine.sequence import Sequence, SequenceStatus
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=4096,
+        max_num_seqs=1,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=16,
+        tensor_parallel_size=1,
+    )
+    sched = Scheduler(cfg)
+
+    first = Sequence("first", list(range(128)), cfg.kvcache_block_size)
+    second = Sequence("second", list(range(64)), cfg.kvcache_block_size)
+    sched.add(first)
+    sched.add(second)
+
+    seqs, is_prefill = sched.schedule()
+
+    assert is_prefill is True
+    assert seqs == [first]
+    assert first.status == SequenceStatus.RUNNING
+    assert second.status == SequenceStatus.WAITING
+    assert list(s.seq_id for s in sched.waiting) == ["second"]
+
+
+def test_scheduler_stops_prefill_when_capacity_cannot_allocate(tmp_path, monkeypatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+    from nanovllm_voxcpm.engine.sequence import Sequence, SequenceStatus
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=4096,
+        max_num_seqs=4,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=16,
+        tensor_parallel_size=1,
+    )
+    sched = Scheduler(cfg)
+
+    running = Sequence("running", list(range(32)), cfg.kvcache_block_size)
+    blocked = Sequence("blocked", list(range(128)), cfg.kvcache_block_size)
+    tail = Sequence("tail", list(range(64)), cfg.kvcache_block_size)
+    sched.add(running)
+    sched.schedule()
+    sched.add(blocked)
+    sched.add(tail)
+
+    monkeypatch.setattr(sched.block_manager, "can_allocate", lambda seq: seq.seq_id != "blocked")
+
+    seqs, is_prefill = sched.schedule()
+
+    assert is_prefill is False
+    assert seqs == [running]
+    assert blocked.status == SequenceStatus.WAITING
+    assert tail.status == SequenceStatus.WAITING
+    assert list(s.seq_id for s in sched.waiting) == ["blocked", "tail"]
+
+
+def test_scheduler_preempts_other_running_sequence_when_decode_needs_capacity(tmp_path, monkeypatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+    from nanovllm_voxcpm.engine.sequence import Sequence, SequenceStatus
+
+    class _Callbacks:
+        def __init__(self):
+            self.preempted: list[str] = []
+
+        def on_seq_added(self, seq):
+            return None
+
+        def on_seq_running(self, seq):
+            return None
+
+        def on_seq_waiting(self, seq):
+            self.preempted.append(seq.seq_id)
+
+        def on_seq_removed(self, seq, *, was_running):
+            return None
+
+        def can_schedule(self, running_adapter_ids, seq):
+            return True
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=4096,
+        max_num_seqs=2,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=16,
+        tensor_parallel_size=1,
+    )
+    callbacks = _Callbacks()
+    sched = Scheduler(cfg, callbacks=callbacks)
+
+    first = Sequence("first", list(range(128)), cfg.kvcache_block_size)
+    second = Sequence("second", list(range(64)), cfg.kvcache_block_size)
+    sched.add(first)
+    sched.add(second)
+    sched.schedule()
+
+    first_calls = {"count": 0}
+
+    def fake_can_append(seq):
+        if seq.seq_id == "first":
+            first_calls["count"] += 1
+            return first_calls["count"] > 1
+        return True
+
+    monkeypatch.setattr(sched.block_manager, "can_append", fake_can_append)
+
+    seqs, is_prefill = sched.schedule()
+
+    assert is_prefill is False
+    assert seqs == [first]
+    assert callbacks.preempted == ["second"]
+    assert second.status == SequenceStatus.WAITING
+    assert first.status == SequenceStatus.RUNNING
+
+
+def test_scheduler_preempt_moves_sequence_back_to_waiting(tmp_path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+    from nanovllm_voxcpm.engine.sequence import Sequence, SequenceStatus
+
+    class _Callbacks:
+        def __init__(self):
+            self.preempted: list[str] = []
+
+        def on_seq_added(self, seq):
+            return None
+
+        def on_seq_running(self, seq):
+            return None
+
+        def on_seq_waiting(self, seq):
+            self.preempted.append(seq.seq_id)
+
+        def on_seq_removed(self, seq, *, was_running):
+            return None
+
+        def can_schedule(self, running_adapter_ids, seq):
+            return True
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=4096,
+        max_num_seqs=1,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=16,
+        tensor_parallel_size=1,
+    )
+    callbacks = _Callbacks()
+    sched = Scheduler(cfg, callbacks=callbacks)
+
+    seq = Sequence("only", list(range(128)), cfg.kvcache_block_size)
+    sched.add(seq)
+    sched.schedule()
+    assert seq.status == SequenceStatus.RUNNING
+
+    sched.running.remove(seq)
+    sched.preempt(seq)
+
+    assert callbacks.preempted == ["only"]
+    assert seq.status == SequenceStatus.WAITING
+    assert list(s.seq_id for s in sched.waiting) == ["only"]

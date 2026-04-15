@@ -144,6 +144,48 @@ def test_generate_invalid_base64_prompt_latents_returns_400(app):
         assert "Invalid base64 in prompt_latents_base64" in r.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "payload, expected_detail",
+    [
+        (
+            {
+                "target_text": "hi",
+                "ref_audio_wav_base64": base64.b64encode(b"x").decode("utf-8"),
+                "ref_audio_latents_base64": base64.b64encode(b"y").decode("utf-8"),
+            },
+            "ref_audio_wav_* and ref_audio_latents_base64 are mutually exclusive",
+        ),
+        (
+            {
+                "target_text": "hi",
+                "ref_audio_wav_base64": base64.b64encode(b"x").decode("utf-8"),
+            },
+            "reference wav requires ref_audio_wav_base64 + ref_audio_wav_format",
+        ),
+    ],
+)
+def test_generate_ref_audio_validation_matrix_400(app, payload, expected_detail):
+    with TestClient(app) as client:
+        r = client.post("/generate", json=payload)
+        assert r.status_code == 400
+        assert r.json() == {"detail": expected_detail}
+
+
+def test_generate_invalid_prompt_latent_shape_returns_400(app):
+    with TestClient(app) as client:
+        invalid_latents = np.arange(63, dtype=np.float32).tobytes()
+        r = client.post(
+            "/generate",
+            json={
+                "target_text": "hi",
+                "prompt_latents_base64": base64.b64encode(invalid_latents).decode("utf-8"),
+                "prompt_text": "p",
+            },
+        )
+        assert r.status_code == 400
+        assert "Invalid latent payload in prompt_latents_base64" in r.json()["detail"]
+
+
 def test_generate_returns_500_if_cfg_missing(app):
     with TestClient(app) as client:
         delattr(client.app.state, "cfg")
@@ -231,6 +273,20 @@ def test_generate_wav_prompt_hits_encode_latents_branch(app, monkeypatch):
     assert called["ok"] is True
 
 
+def test_generate_invalid_base64_ref_audio_wav_returns_400(app):
+    with TestClient(app) as client:
+        r = client.post(
+            "/generate",
+            json={
+                "target_text": "hi",
+                "ref_audio_wav_base64": "a",
+                "ref_audio_wav_format": "wav",
+            },
+        )
+        assert r.status_code == 400
+        assert "Invalid base64 in ref_audio_wav_base64" in r.json()["detail"]
+
+
 def test_generate_latents_prompt_hits_latents_decode_branch(app, monkeypatch):
     import app.api.routes.generate as generate_route
 
@@ -257,6 +313,69 @@ def test_generate_latents_prompt_hits_latents_decode_branch(app, monkeypatch):
         ) as resp:
             assert resp.status_code == 200
             assert resp.read() == b""
+
+
+def test_generate_rejects_ref_audio_for_models_without_support(app, monkeypatch):
+    import app.api.routes.generate as generate_route
+
+    def unsupported_generate(
+        *,
+        target_text,
+        prompt_latents=None,
+        prompt_text="",
+        max_generate_length=2000,
+        temperature=1.0,
+        cfg_value=1.5,
+        lora_name=None,
+    ):
+        async def _stream():
+            if False:  # pragma: no cover
+                yield None
+
+        return _stream()
+
+    async def consume_stream_once(*, wav_chunks, **kwargs):
+        async for _chunk in wav_chunks:
+            break
+        if False:  # pragma: no cover
+            yield b""
+
+    monkeypatch.setattr(generate_route, "stream_mp3", consume_stream_once)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.server, "generate", unsupported_generate)
+        ref_latents = np.arange(64, dtype=np.float32).tobytes()
+        r = client.post(
+            "/generate",
+            json={
+                "target_text": "hi",
+                "ref_audio_latents_base64": base64.b64encode(ref_latents).decode("utf-8"),
+            },
+        )
+        assert r.status_code == 400
+        assert "Reference audio is not supported" in r.json()["detail"]
+
+
+def test_generate_converts_server_value_error_to_400(app, monkeypatch):
+    import app.api.routes.generate as generate_route
+
+    async def boom_generate(**kwargs):
+        raise ValueError("bad input")
+        yield  # pragma: no cover
+
+    async def consume_stream_once(*, wav_chunks, **kwargs):
+        async for _chunk in wav_chunks:
+            break
+        if False:  # pragma: no cover
+            yield b""
+
+    monkeypatch.setattr(generate_route, "stream_mp3", consume_stream_once)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(client.app.state.server, "generate", boom_generate)
+        r = client.post("/generate", json={"target_text": "hi"})
+        assert r.status_code == 400
+        assert r.json() == {"detail": "bad input"}
 
 
 def test_encode_latents_invalid_base64_returns_400(app):
