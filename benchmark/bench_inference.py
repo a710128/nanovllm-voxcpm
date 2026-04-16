@@ -21,6 +21,17 @@ from typing import TYPE_CHECKING, Any, Iterable, cast
 
 import torch
 
+from lora_bench_utils import (
+    add_lora_args,
+    build_lora_config,
+    choose_lora_name,
+    make_lora_names,
+    make_lora_rng,
+    register_loras_in_process,
+    unregister_loras_in_process,
+    validate_lora_args,
+)
+
 if TYPE_CHECKING:
     from nanovllm_voxcpm.models.voxcpm.server import AsyncVoxCPMServerPool
 
@@ -88,6 +99,7 @@ async def _consume_one(
     max_generate_length: int,
     temperature: float,
     cfg_value: float,
+    lora_name: str | None,
 ) -> OneRequestResult:
     start = time.perf_counter()
     first_chunk_t = None
@@ -99,6 +111,7 @@ async def _consume_one(
         max_generate_length=max_generate_length,
         temperature=temperature,
         cfg_value=cfg_value,
+        lora_name=lora_name,
     ):
         if first_chunk_t is None:
             first_chunk_t = time.perf_counter()
@@ -148,6 +161,8 @@ async def _run_iteration(
     temperature: float,
     cfg_value: float,
     sample_rate: int | None,
+    lora_names: list[str],
+    lora_rng: Any,
 ) -> IterationResult:
     start = time.perf_counter()
     tasks = [
@@ -158,6 +173,7 @@ async def _run_iteration(
                 max_generate_length=max_generate_length,
                 temperature=temperature,
                 cfg_value=cfg_value,
+                lora_name=choose_lora_name(lora_names, lora_rng),
             )
         )
         for _ in range(concurrency)
@@ -177,7 +193,7 @@ async def _run_iteration(
     audio_s_stdev: float | None
     if sample_rate is not None and sample_rate > 0:
         audio_s_per_req = [r.total_samples / float(sample_rate) for r in results]
-        rtfs = [r.wall_s / a if a > 0 else float("inf") for r, a in zip(results, audio_s_per_req)]
+        rtfs = [_rtf_excluding_ttfb(r.wall_s, r.ttfb_s, a) for r, a in zip(results, audio_s_per_req)]
         audio_s_per_req_mean = _mean(audio_s_per_req)
         rtf_per_req_mean = _mean(rtfs)
 
@@ -233,6 +249,12 @@ def _stdev(xs: Iterable[float]) -> float:
     return statistics.stdev(xs)
 
 
+def _rtf_excluding_ttfb(wall_s: float, ttfb_s: float, audio_s: float) -> float:
+    if audio_s <= 0:
+        return float("inf")
+    return max(wall_s - ttfb_s, 0.0) / audio_s
+
+
 async def async_main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Benchmark VoxCPM inference speed")
     p.add_argument("--model", required=True, help="Local model directory (or HF repo id)")
@@ -253,6 +275,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-generate-length", type=int, default=2000)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--cfg-value", type=float, default=2.0)
+    add_lora_args(p)
 
     p.add_argument("--concurrency", type=int, default=1, help="Number of concurrent requests")
     p.add_argument(
@@ -286,6 +309,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         raise ValueError("--warmup must be >= 0")
     if args.iters <= 0:
         raise ValueError("--iters must be >= 1")
+    validate_lora_args(args)
 
     sample_rate = args.sample_rate
     if sample_rate is None:
@@ -294,6 +318,8 @@ async def async_main(argv: list[str] | None = None) -> int:
         sample_rate = _maybe_read_sample_rate(args.model)
 
     devices = _parse_devices(args.devices)
+    lora_names = make_lora_names(args)
+    lora_rng = make_lora_rng(args)
 
     # Import after arg parsing so `--help` works even if optional runtime deps are missing.
     from nanovllm_voxcpm import VoxCPM
@@ -309,6 +335,11 @@ async def async_main(argv: list[str] | None = None) -> int:
             gpu_memory_utilization=args.gpu_memory_utilization,
             enforce_eager=args.enforce_eager,
             devices=devices,
+            lora_config=build_lora_config(
+                args.model,
+                max_loras=int(args.max_loras),
+                max_lora_rank=int(args.max_lora_rank),
+            ),
         ),
     )
 
@@ -316,6 +347,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     try:
         # Async mode: from_pretrained returns AsyncVoxCPMServerPool.
         await server_pool.wait_for_ready()
+        await register_loras_in_process(server_pool, lora_names, args.lora_path)
 
         # Prefer the runtime-reported sample rate from the model server.
         if args.sample_rate is None:
@@ -336,6 +368,8 @@ async def async_main(argv: list[str] | None = None) -> int:
                 temperature=args.temperature,
                 cfg_value=args.cfg_value,
                 sample_rate=sample_rate,
+                lora_names=lora_names,
+                lora_rng=lora_rng,
             )
 
         # Measure
@@ -349,9 +383,12 @@ async def async_main(argv: list[str] | None = None) -> int:
                     temperature=args.temperature,
                     cfg_value=args.cfg_value,
                     sample_rate=sample_rate,
+                    lora_names=lora_names,
+                    lora_rng=lora_rng,
                 )
             )
     finally:
+        unregister_errors = await unregister_loras_in_process(server_pool, lora_names)
         await server_pool.stop()
 
     wall_s = [it.wall_s for it in iters]
@@ -383,6 +420,12 @@ async def async_main(argv: list[str] | None = None) -> int:
     print(f"  model: {args.model}")
     print(f"  devices: {devices}")
     print(f"  concurrency: {args.concurrency}")
+    if lora_names:
+        print(f"  loras: {len(lora_names)} aliases from {args.lora_path}")
+    if unregister_errors:
+        print("  lora cleanup warnings:")
+        for msg in unregister_errors:
+            print(f"    {msg}")
     print(f"  iters: {args.iters} (warmup {args.warmup})")
     if sample_rate is not None:
         print(f"  sample_rate: {sample_rate}")

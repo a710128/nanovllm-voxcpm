@@ -178,75 +178,76 @@ See `benchmark/README.md` for more flags.
 
 ### Reference Results (RTX 4090)
 
-All reference numbers in this section are measured on NVIDIA GeForce RTX 4090.
+All reference numbers in this section are measured on NVIDIA GeForce RTX 4090 with `openbmb/VoxCPM2`.
+The benchmark now defines `RTF_per_req_mean` as the mean over requests of `((request_wall_time - TTFB) / request_audio_duration)` under the given concurrency.
 
-The benchmark reports `RTF_per_req_mean`, defined as the mean over requests of
-`(request_wall_time / request_audio_duration)` under the given concurrency.
-
-Test setup:
-
-- GPU: NVIDIA GeForce RTX 4090
-- Model: `~/VoxCPM1.5`
-- Benchmark: `benchmark/bench_inference.py`
-- Runs: `--warmup 1 --iters 5`
-
-Short prompt (`"Hello world."`):
-
-Note: with a very short prompt, the model's stopping behavior can be noisy, so output audio duration (and thus RTF) may have high variance at higher concurrency.
+Short prompt, no LoRA:
 
 | concurrency | TTFB p50 (s) | TTFB p90 (s) | RTF_per_req_mean |
 |---:|---:|---:|---:|
-| 1 | 0.1741 ± 0.0012 | 0.1741 ± 0.0012 | 0.1918 ± 0.0127 |
-| 8 | 0.1804 ± 0.0041 | 0.1807 ± 0.0040 | 0.2353 ± 0.0162 |
-| 16 | 0.1870 ± 0.0055 | 0.1878 ± 0.0054 | 0.3009 ± 0.0094 |
-| 32 | 0.1924 ± 0.0052 | 0.1932 ± 0.0051 | 0.4055 ± 0.0099 |
-| 64 | 0.2531 ± 0.0823 | 0.2918 ± 0.0938 | 0.6755 ± 0.0668 |
+| 1 | 0.1948 ± 0.0008 | 0.1948 ± 0.0008 | 0.0983 ± 0.0027 |
+| 8 | 0.2062 ± 0.0053 | 0.2065 ± 0.0053 | 0.1429 ± 0.0046 |
+| 16 | 0.1959 ± 0.0022 | 0.1963 ± 0.0022 | 0.2221 ± 0.0069 |
+| 32 | 0.2133 ± 0.0011 | 0.2151 ± 0.0010 | 0.3927 ± 0.0108 |
+| 64 | 0.2733 ± 0.0847 | 0.2767 ± 0.0849 | 0.6958 ± 0.0347 |
 
-Long prompt (`benchmark/target_text_100w_en.txt`):
+Long prompt, no LoRA:
 
 | concurrency | TTFB p50 (s) | TTFB p90 (s) | RTF_per_req_mean |
 |---:|---:|---:|---:|
-| 1 | 0.1909 ± 0.0102 | 0.1909 ± 0.0102 | 0.0805 ± 0.0007 |
-| 8 | 0.1902 ± 0.0021 | 0.1905 ± 0.0021 | 0.1159 ± 0.0004 |
-| 16 | 0.2044 ± 0.0050 | 0.2050 ± 0.0051 | 0.1825 ± 0.0007 |
-| 32 | 0.2168 ± 0.0034 | 0.2185 ± 0.0032 | 0.3207 ± 0.0022 |
-| 64 | 0.3235 ± 0.0063 | 0.3250 ± 0.0064 | 0.5556 ± 0.0033 |
+| 1 | 0.2067 ± 0.0036 | 0.2067 ± 0.0036 | 0.1252 ± 0.0005 |
+| 8 | 0.3316 ± 0.0546 | 0.3322 ± 0.0548 | 0.2076 ± 0.0086 |
+| 16 | 0.2449 ± 0.0236 | 0.2456 ± 0.0235 | 0.3223 ± 0.0054 |
+| 32 | 0.3365 ± 0.0116 | 0.3393 ± 0.0118 | 0.5517 ± 0.0075 |
+| 64 | 0.5795 ± 0.0546 | 0.5834 ± 0.0544 | 1.0146 ± 0.0077 |
 
-Closed-loop users benchmark (`benchmark/bench_closed_loop_users.py`):
+Short prompt, LoRA enabled with 32 runtime slots:
 
-- Model: `~/VoxCPM1.5`
-- Command:
+| concurrency | TTFB p50 (s) | TTFB p90 (s) | RTF_per_req_mean |
+|---:|---:|---:|---:|
+| 1 | 0.4568 ± 0.0048 | 0.4568 ± 0.0048 | 0.1495 ± 0.0028 |
+| 8 | 0.6041 ± 0.1172 | 0.6045 ± 0.1172 | 0.2048 ± 0.0039 |
+| 16 | 0.5892 ± 0.1392 | 0.5899 ± 0.1393 | 0.3025 ± 0.0040 |
+| 32 | 0.6446 ± 0.2677 | 0.6460 ± 0.2679 | 0.5300 ± 0.0554 |
+| 64 | 0.4904 ± 0.0579 | 0.4931 ± 0.0575 | 0.8623 ± 0.0131 |
+| 128 | 0.7240 ± 0.2278 | 0.7805 ± 0.1791 | 1.7254 ± 0.0873 |
 
-```bash
-uv run python benchmark/bench_closed_loop_users.py \
-  --model ~/VoxCPM1.5 \
-  --num-users 60 --warmup-s 5 --duration-s 60 \
-  --target-text-file benchmark/target_text_100w_en.txt \
-  --max-generate-length 2000
-```
+Long prompt, LoRA enabled with 32 runtime slots:
 
-Results (measured window):
+| concurrency | TTFB p50 (s) | TTFB p90 (s) | RTF_per_req_mean |
+|---:|---:|---:|---:|
+| 1 | 0.4653 ± 0.0052 | 0.4653 ± 0.0052 | 0.1815 ± 0.0008 |
+| 8 | 0.6196 ± 0.1261 | 0.6200 ± 0.1260 | 0.2550 ± 0.0028 |
+| 16 | 0.6078 ± 0.1007 | 0.6082 ± 0.1007 | 0.3943 ± 0.0014 |
+| 32 | 0.5718 ± 0.1215 | 0.5727 ± 0.1215 | 0.6410 ± 0.0028 |
+| 64 | 0.7754 ± 0.0811 | 0.7785 ± 0.0814 | 1.1209 ± 0.0024 |
 
-| item | value |
-|---|---:|
-| sample_rate (Hz) | 44100 |
-| users | 60 |
-| started | 119 |
-| achieved rps | 1.98 |
-| ok | 119 |
-| err | 0 |
+Closed-loop results:
 
-TTFB (seconds, ok requests):
+| mode | users | registered LoRAs | started | achieved rps | ok | err |
+|---|---:|---:|---:|---:|---:|---:|
+| no LoRA | 60 | 0 | 65 | 1.08 | 65 | 0 |
+| LoRA | 30 | 32 | 52 | 0.87 | 52 | 0 |
+| LoRA | 30 | 128 | 48 | 0.80 | 48 | 0 |
+| LoRA | 30 | 256 | 51 | 0.85 | 51 | 0 |
 
-| p50 | p90 | p95 | p99 | mean | stdev |
-|---:|---:|---:|---:|---:|---:|
-| 0.2634 | 0.3477 | 0.3531 | 0.3631 | 0.2884 | 0.0451 |
+Closed-loop TTFB (seconds, ok requests):
 
-RTF (wall/audio, ok requests):
+| mode | users | registered LoRAs | p50 | p90 | p95 | p99 | mean | stdev |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| no LoRA | 60 | 0 | 0.3867 | 0.4602 | 0.4649 | 0.4933 | 0.3819 | 0.0690 |
+| LoRA | 30 | 32 | 0.5137 | 0.8142 | 0.8539 | 0.8970 | 0.5692 | 0.1243 |
+| LoRA | 30 | 128 | 0.5595 | 0.9116 | 0.9310 | 0.9671 | 0.6267 | 0.1426 |
+| LoRA | 30 | 256 | 0.5907 | 0.9143 | 0.9165 | 0.9737 | 0.6459 | 0.1487 |
 
-| p50 | p90 | p95 | p99 | mean | stdev |
-|---:|---:|---:|---:|---:|---:|
-| 0.7285 | 0.7946 | 0.8028 | 0.8255 | 0.6929 | 0.1062 |
+Closed-loop RTF ((wall - TTFB)/audio, ok requests):
+
+| mode | users | registered LoRAs | p50 | p90 | p95 | p99 | mean | stdev |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| no LoRA | 60 | 0 | 1.0802 | 1.1958 | 1.2033 | 1.2090 | 1.0288 | 0.2077 |
+| LoRA | 30 | 32 | 0.8037 | 0.9202 | 0.9375 | 0.9615 | 0.7665 | 0.1395 |
+| LoRA | 30 | 128 | 0.8263 | 0.9532 | 0.9844 | 1.0188 | 0.7752 | 0.1598 |
+| LoRA | 30 | 256 | 0.8300 | 0.9217 | 0.9632 | 0.9938 | 0.7741 | 0.1487 |
 
 ## Acknowledgments
 

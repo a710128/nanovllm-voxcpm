@@ -4,7 +4,7 @@ This script simulates N independent users. Each user sends a new request
 immediately after the previous one completes (closed-loop). We measure:
 
 - TTFB: time-to-first generated chunk (in-process) OR time-to-first response byte (HTTP)
-- RTF: request wall_time / generated_audio_seconds
+- RTF: (request wall_time - TTFB) / generated_audio_seconds
 
 In-process (direct engine) run (recommended via uv):
   uv run python benchmark/bench_closed_loop_users.py \
@@ -39,6 +39,20 @@ from typing import TYPE_CHECKING, Any, Iterable, cast
 from urllib.parse import urlparse
 
 import torch
+
+from lora_bench_utils import (
+    add_lora_args,
+    add_lora_to_payload,
+    build_lora_config,
+    choose_lora_name,
+    make_lora_names,
+    make_lora_rng,
+    register_loras_http,
+    register_loras_in_process,
+    unregister_loras_http,
+    unregister_loras_in_process,
+    validate_lora_args,
+)
 
 if TYPE_CHECKING:
     from nanovllm_voxcpm.models.voxcpm.server import AsyncVoxCPMServerPool
@@ -86,6 +100,12 @@ def _fmt_float(x: float) -> str:
     if x != x:  # NaN
         return "nan"
     return f"{x:.4f}"
+
+
+def _rtf_excluding_ttfb(wall_s: float, ttfb_s: float, audio_s: float) -> float:
+    if audio_s <= 0:
+        return float("inf")
+    return max(wall_s - ttfb_s, 0.0) / audio_s
 
 
 @dataclass(frozen=True)
@@ -467,6 +487,7 @@ async def _consume_one_in_process(
     max_generate_length: int,
     temperature: float,
     cfg_value: float,
+    lora_name: str | None,
 ) -> tuple[float, float, int]:
     """Return: ttfb_s, wall_s, total_samples."""
 
@@ -479,6 +500,7 @@ async def _consume_one_in_process(
         max_generate_length=max_generate_length,
         temperature=temperature,
         cfg_value=cfg_value,
+        lora_name=lora_name,
     ):
         if first_chunk_t is None:
             first_chunk_t = time.perf_counter()
@@ -545,6 +567,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-generate-length", type=int, default=8000)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--cfg-value", type=float, default=2.0)
+    add_lora_args(p)
 
     p.add_argument(
         "--num-users",
@@ -590,8 +613,11 @@ async def async_main(argv: list[str] | None = None) -> int:
         raise ValueError("--duration-s must be > 0")
     if args.url is None and not args.model:
         raise ValueError("in-process mode requires --model (or use --url for HTTP mode)")
+    validate_lora_args(args)
 
     devices = _parse_devices(args.devices)
+    lora_names = make_lora_names(args)
+    lora_rng = make_lora_rng(args)
 
     server_pool: AsyncVoxCPMServerPool | None = None
     sample_rate: int | None = None
@@ -611,6 +637,11 @@ async def async_main(argv: list[str] | None = None) -> int:
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 enforce_eager=args.enforce_eager,
                 devices=devices,
+                lora_config=build_lora_config(
+                    args.model,
+                    max_loras=int(args.max_loras),
+                    max_lora_rank=int(args.max_lora_rank),
+                ),
             ),
         )
 
@@ -620,6 +651,7 @@ async def async_main(argv: list[str] | None = None) -> int:
 
     results: list[OneRequestResult] = []
     results_lock = asyncio.Lock()
+    unregister_errors: list[str] = []
 
     async def _record(r: OneRequestResult) -> None:
         async with results_lock:
@@ -633,19 +665,25 @@ async def async_main(argv: list[str] | None = None) -> int:
                 return
 
             if args.url is not None:
+                lora_name = choose_lora_name(lora_names, lora_rng)
                 ok, err, ttfb_s, wall_s, total_bytes, audio_s = await asyncio.to_thread(
                     _http_post_stream_metrics,
                     args.url,
-                    {
-                        "target_text": args.target_text,
-                        "max_generate_length": int(args.max_generate_length),
-                        "temperature": float(args.temperature),
-                        "cfg_value": float(args.cfg_value),
-                    },
+                    add_lora_to_payload(
+                        {
+                            "target_text": args.target_text,
+                            "max_generate_length": int(args.max_generate_length),
+                            "temperature": float(args.temperature),
+                            "cfg_value": float(args.cfg_value),
+                        },
+                        lora_name,
+                    ),
                     timeout_s=float(args.http_timeout_s),
                 )
                 rtf = (
-                    (wall_s / audio_s) if (ok and wall_s is not None and audio_s is not None and audio_s > 0) else None
+                    _rtf_excluding_ttfb(wall_s, ttfb_s, audio_s)
+                    if (ok and wall_s is not None and ttfb_s is not None and audio_s is not None and audio_s > 0)
+                    else None
                 )
                 await _record(
                     OneRequestResult(
@@ -673,9 +711,10 @@ async def async_main(argv: list[str] | None = None) -> int:
                     max_generate_length=int(args.max_generate_length),
                     temperature=float(args.temperature),
                     cfg_value=float(args.cfg_value),
+                    lora_name=choose_lora_name(lora_names, lora_rng),
                 )
                 audio_s = (total_samples / float(sample_rate)) if (sample_rate and sample_rate > 0) else None
-                rtf = (wall_s / audio_s) if (audio_s is not None and audio_s > 0) else None
+                rtf = _rtf_excluding_ttfb(wall_s, ttfb_s, audio_s) if (audio_s is not None and audio_s > 0) else None
                 await _record(
                     OneRequestResult(
                         user_id=user_id,
@@ -713,11 +752,14 @@ async def async_main(argv: list[str] | None = None) -> int:
     try:
         if server_pool is not None:
             await server_pool.wait_for_ready()
+            await register_loras_in_process(server_pool, lora_names, args.lora_path)
             try:
                 model_info = await server_pool.get_model_info()
                 sample_rate = int(model_info["sample_rate"])
             except Exception:
                 sample_rate = None
+        elif args.url is not None:
+            await register_loras_http(args.url, lora_names, args.lora_path, timeout_s=float(args.http_timeout_s))
 
         t0 = time.perf_counter()
         measure_start_t = t0 + float(args.warmup_s)
@@ -739,7 +781,10 @@ async def async_main(argv: list[str] | None = None) -> int:
             await asyncio.gather(*user_tasks, return_exceptions=True)
     finally:
         if server_pool is not None:
+            unregister_errors = await unregister_loras_in_process(server_pool, lora_names)
             await server_pool.stop()
+        elif args.url is not None:
+            unregister_errors = await unregister_loras_http(args.url, lora_names, timeout_s=float(args.http_timeout_s))
 
     # Summarize (measured window only).
     measured = [r for r in results if r.started_t >= measure_start_t and r.started_t < measure_end_t]
@@ -783,6 +828,12 @@ async def async_main(argv: list[str] | None = None) -> int:
     if sample_rate is not None:
         print(f"  sample_rate: {sample_rate}")
     print(f"  users: {summary.num_users}")
+    if lora_names:
+        print(f"  loras: {len(lora_names)} aliases from {args.lora_path}")
+    if unregister_errors:
+        print("  lora cleanup warnings:")
+        for msg in unregister_errors:
+            print(f"    {msg}")
     print(f"  duration_s: {summary.duration_s} (warmup {summary.warmup_s})")
     print("Results (measured window)")
     print(f"  started: {summary.total_started_measured} (achieved {summary.achieved_rps_started:.2f} rps)")
