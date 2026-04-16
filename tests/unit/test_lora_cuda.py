@@ -775,3 +775,81 @@ def test_vendored_triton_backend_add_lora_cuda():
     )
 
     assert torch.allclose(out.cpu().flatten(), torch.tensor([4.0, 10.0], dtype=torch.float16))
+
+
+def test_vendored_triton_shrink_small_m_multi_lora_cuda():
+    from nanovllm_voxcpm.lora_ops.triton_ops.lora_shrink_op import lora_shrink
+
+    device = "cuda"
+    dtype = torch.float16
+    m = 4
+    hidden_size = 160
+    rank = 8
+    inputs = torch.arange(m * hidden_size, device=device, dtype=torch.float32).reshape(m, hidden_size).to(dtype) / 100
+    lora_a = torch.randn(2, rank, hidden_size, device=device, dtype=dtype)
+    output = torch.empty((1, m, rank), device=device, dtype=dtype)
+
+    token_lora_mapping = torch.tensor([0, 1, 0, 1], dtype=torch.int32, device=device)
+    token_indices_sorted_by_lora_ids = torch.tensor([0, 2, 1, 3], dtype=torch.int32, device=device)
+    num_tokens_per_lora = torch.tensor([2, 2, 0], dtype=torch.int32, device=device)
+    lora_token_start_loc = torch.tensor([0, 2, 4, 4], dtype=torch.int32, device=device)
+    lora_ids = torch.tensor([0, 1, -1], dtype=torch.int32, device=device)
+
+    lora_shrink(
+        inputs,
+        [lora_a],
+        output,
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        False,
+        2,
+        0.5,
+    )
+
+    expected = torch.empty((m, rank), device=device, dtype=torch.float32)
+    for token_idx, lora_idx in enumerate(token_lora_mapping.tolist()):
+        expected[token_idx] = torch.matmul(inputs[token_idx].float(), lora_a[lora_idx].float().transpose(0, 1)) * 0.5
+
+    assert torch.allclose(output.squeeze(0).float().cpu(), expected.cpu(), atol=5e-2, rtol=5e-2)
+
+
+def test_vendored_triton_shrink_small_m_split_k_cuda():
+    from nanovllm_voxcpm.lora_ops.triton_ops.lora_shrink_op import lora_shrink
+
+    device = "cuda"
+    dtype = torch.float16
+    m = 4
+    hidden_size = 4096
+    rank = 1
+    inputs = torch.randn(m, hidden_size, device=device, dtype=dtype)
+    lora_a = torch.randn(2, rank, hidden_size, device=device, dtype=dtype)
+    output = torch.empty((1, m, rank), device=device, dtype=dtype)
+
+    token_lora_mapping = torch.tensor([0, 1, 0, 1], dtype=torch.int32, device=device)
+    token_indices_sorted_by_lora_ids = torch.tensor([0, 2, 1, 3], dtype=torch.int32, device=device)
+    num_tokens_per_lora = torch.tensor([2, 2, 0], dtype=torch.int32, device=device)
+    lora_token_start_loc = torch.tensor([0, 2, 4, 4], dtype=torch.int32, device=device)
+    lora_ids = torch.tensor([0, 1, -1], dtype=torch.int32, device=device)
+
+    lora_shrink(
+        inputs,
+        [lora_a],
+        output,
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        False,
+        2,
+        0.5,
+    )
+
+    expected = torch.empty((m, rank), device=device, dtype=torch.float32)
+    for token_idx, lora_idx in enumerate(token_lora_mapping.tolist()):
+        expected[token_idx] = torch.matmul(inputs[token_idx].float(), lora_a[lora_idx].float().transpose(0, 1)) * 0.5
+
+    assert torch.allclose(output.squeeze(0).float().cpu(), expected.cpu(), atol=2e-1, rtol=2e-1)
