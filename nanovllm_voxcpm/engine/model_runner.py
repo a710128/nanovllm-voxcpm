@@ -563,13 +563,13 @@ class BaseModelRunner:
             set_lora_context(lora_context, domain=domain)
         return positions
 
-    def _make_graph_domain_buffers(self, max_rows: int) -> dict[str, torch.Tensor]:
+    def _make_graph_domain_buffers(self, max_rows: int, max_lora_buckets: int) -> dict[str, torch.Tensor]:
         return {
             "token_to_slot": torch.full((max_rows,), -1, dtype=torch.int32),
             "token_indices_sorted_by_slot": torch.arange(max_rows, dtype=torch.int32),
-            "active_slot_ids": torch.zeros(max_rows, dtype=torch.int32),
-            "num_tokens_per_slot": torch.zeros(max_rows, dtype=torch.int32),
-            "slot_start_offsets": torch.zeros(max_rows + 1, dtype=torch.int32),
+            "active_slot_ids": torch.arange(-1, max_lora_buckets - 1, dtype=torch.int32),
+            "num_tokens_per_slot": torch.zeros(max_lora_buckets, dtype=torch.int32),
+            "slot_start_offsets": torch.zeros(max_lora_buckets + 1, dtype=torch.int32),
         }
 
     def _copy_lora_domain_to_graph_vars(
@@ -594,39 +594,35 @@ class BaseModelRunner:
             domain_vars["token_indices_sorted_by_slot"][: context.token_indices_sorted_by_slot.size(0)] = (
                 context.token_indices_sorted_by_slot.to(domain_vars["token_indices_sorted_by_slot"].device)
             )
-        domain_vars["active_slot_ids"].zero_()
-        if context.active_slot_ids is not None:
-            domain_vars["active_slot_ids"][: context.active_slot_ids.size(0)] = context.active_slot_ids.to(
-                domain_vars["active_slot_ids"].device
-            )
         domain_vars["num_tokens_per_slot"].zero_()
-        if context.num_tokens_per_slot is not None:
-            domain_vars["num_tokens_per_slot"][: context.num_tokens_per_slot.size(0)] = context.num_tokens_per_slot.to(
-                domain_vars["num_tokens_per_slot"].device
+        if context.active_slot_ids is not None and context.num_tokens_per_slot is not None:
+            bucket_indices = (
+                context.active_slot_ids.to(domain_vars["num_tokens_per_slot"].device, dtype=torch.int64) + 1
+            )
+            domain_vars["num_tokens_per_slot"].scatter_(
+                0,
+                bucket_indices,
+                context.num_tokens_per_slot.to(domain_vars["num_tokens_per_slot"].device),
             )
         domain_vars["slot_start_offsets"].zero_()
-        if context.slot_start_offsets is not None:
-            domain_vars["slot_start_offsets"][: context.slot_start_offsets.size(0)] = context.slot_start_offsets.to(
-                domain_vars["slot_start_offsets"].device
-            )
+        domain_vars["slot_start_offsets"][1:] = torch.cumsum(domain_vars["num_tokens_per_slot"], dim=0)
 
     def _set_graph_lora_contexts(self, graph_vars: dict, contexts: dict[str, LoRAContext]) -> None:
         for domain in LORA_DOMAINS:
             context = contexts[domain]
             self._copy_lora_domain_to_graph_vars(graph_vars, domain, context)
             domain_vars = graph_vars["lora_domains"][domain]
-            num_active_slots = 0 if context.active_slot_ids is None else context.active_slot_ids.size(0)
-            num_slot_offsets = 1 if context.slot_start_offsets is None else context.slot_start_offsets.size(0)
             token_count = 0 if context.token_to_slot is None else context.token_to_slot.size(0)
+            num_lora_buckets = domain_vars["active_slot_ids"].size(0)
             set_lora_context(
                 LoRAContext(
                     token_to_slot=domain_vars["token_to_slot"][:token_count],
                     token_indices_sorted_by_slot=domain_vars["token_indices_sorted_by_slot"][:token_count],
-                    active_slot_ids=domain_vars["active_slot_ids"][:num_active_slots],
-                    num_tokens_per_slot=domain_vars["num_tokens_per_slot"][:num_active_slots],
-                    slot_start_offsets=domain_vars["slot_start_offsets"][:num_slot_offsets],
+                    active_slot_ids=domain_vars["active_slot_ids"],
+                    num_tokens_per_slot=domain_vars["num_tokens_per_slot"],
+                    slot_start_offsets=domain_vars["slot_start_offsets"],
                     no_lora_flag=context.no_lora_flag,
-                    num_active_loras=num_active_slots,
+                    num_active_loras=num_lora_buckets,
                 ),
                 domain=domain,
             )
@@ -646,10 +642,11 @@ class BaseModelRunner:
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+        max_lora_buckets = self.max_loras + 1
         lora_domains = {
-            LM_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs),
-            PROJ_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs),
-            DIT_LORA_DOMAIN: self._make_graph_domain_buffers(max_dit_lora_rows),
+            LM_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs, max_lora_buckets),
+            PROJ_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs, max_lora_buckets),
+            DIT_LORA_DOMAIN: self._make_graph_domain_buffers(max_dit_lora_rows, max_lora_buckets),
         }
         outputs = self.make_dummy_outputs(max_bs)
 

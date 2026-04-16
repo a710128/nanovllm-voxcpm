@@ -259,6 +259,106 @@ def test_lora_linear_cuda_graph_replay():
     set_backend_for_testing(_FakePunicaBackend())
 
 
+def test_runner_lora_cuda_graph_replay_supports_active_lora_count_changes():
+    from types import SimpleNamespace
+
+    from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+    from nanovllm_voxcpm.utils.context import reset_all_contexts, set_context, set_lora_context
+
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    runner = object.__new__(_TinyCaptureRunner)
+    runner.__class__ = type("_TinyCaptureRunnerInstance", (_TinyCaptureRunner, BaseModelRunner), {})
+    runner.max_lora_rank = 1
+    runner.max_loras = 2
+    runner.block_size = 256
+    runner.enforce_eager = False
+    runner.model = _TinyDecodeModel(max_loras=2, max_lora_rank=1).cuda()
+    runner._config = SimpleNamespace(
+        max_num_seqs=8,
+        max_model_len=8,
+        lora_config=SimpleNamespace(max_loras=2, max_lora_rank=1),
+    )
+    with torch.no_grad():
+        runner.model.proj.weight.zero_()
+        runner.model.output.weight.fill_(1.0)
+        runner.model.proj.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.tensor([[1.0, 0.0, 0.0, 0.0]], device="cuda"),
+            lora_b=torch.tensor([[2.0], [0.0], [0.0]], device="cuda"),
+            effective_rank=1,
+            scaling=1.0,
+        )
+        runner.model.proj.set_slot_lora(
+            slot_id=1,
+            lora_a=torch.tensor([[0.0, 1.0, 0.0, 0.0]], device="cuda"),
+            lora_b=torch.tensor([[3.0], [0.0], [0.0]], device="cuda"),
+            effective_rank=1,
+            scaling=1.0,
+        )
+
+    default_device = torch.empty(()).device
+    torch.set_default_device("cuda")
+    try:
+        runner.capture_cudagraph()
+    finally:
+        torch.set_default_device(default_device)
+
+    inputs = {
+        "positions": torch.tensor([0, 1], dtype=torch.int64, device="cuda"),
+        "tokens": torch.tensor([3, 5], dtype=torch.int64, device="cuda"),
+    }
+    slot_mapping = torch.tensor([0, 1], dtype=torch.int32, device="cuda")
+    context_lens = torch.tensor([1, 1], dtype=torch.int32, device="cuda")
+    block_tables = torch.zeros(2, 1, dtype=torch.int32, device="cuda")
+
+    set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+    set_lora_context(
+        LoRAContext(
+            token_to_slot=torch.tensor([0, -1], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
+    )
+    runner.run_model(inputs, is_prefill=False)
+
+    set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+    set_lora_context(
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=2,
+        )
+    )
+    graph_out = runner.run_model(inputs, is_prefill=False).cpu()
+
+    set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+    set_lora_context(
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=2,
+        )
+    )
+    eager_out = runner.model(**inputs).cpu()
+
+    assert torch.allclose(graph_out, eager_out)
+    reset_all_contexts()
+    set_backend_for_testing(_FakePunicaBackend())
+
+
 def test_lora_capture_cudagraph_keeps_python_host_flags():
     from types import SimpleNamespace
 
@@ -289,6 +389,9 @@ def test_lora_capture_cudagraph_keeps_python_host_flags():
     context = runner.graph_vars["lora_domains"]["lm_domain"]
     assert "no_lora_flag_cpu" not in context
     assert "num_active_loras_cpu" not in context
+    assert torch.equal(context["active_slot_ids"].cpu(), torch.tensor([-1, 0], dtype=torch.int32))
+    assert torch.equal(context["num_tokens_per_slot"].cpu(), torch.tensor([0, 1], dtype=torch.int32))
+    assert torch.equal(context["slot_start_offsets"].cpu(), torch.tensor([0, 0, 1], dtype=torch.int32))
     assert 1 in runner.graphs["lora"]
 
 
