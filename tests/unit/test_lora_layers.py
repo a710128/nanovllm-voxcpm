@@ -152,6 +152,52 @@ def test_lora_linear_mixed_slots_with_runtime_context():
     assert torch.allclose(y[2], torch.tensor([23.0, 34.5]))
 
 
+def test_lora_linear_uses_domain_specific_runtime_context():
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+    from nanovllm_voxcpm.utils.context import PROJ_LORA_DOMAIN, reset_lora_context, set_lora_context
+
+    layer = LoRALinear(
+        in_features=2,
+        out_features=1,
+        bias=False,
+        max_loras=2,
+        max_lora_rank=1,
+        lora_domain=PROJ_LORA_DOMAIN,
+    )
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.set_slot_lora(
+            slot_id=1,
+            lora_a=torch.tensor([[1.0, 0.0]]),
+            lora_b=torch.tensor([[2.0]]),
+            effective_rank=1,
+            scaling=1.0,
+        )
+
+    set_lora_context(
+        token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32),
+        token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32),
+        active_slot_ids=torch.tensor([0], dtype=torch.int32),
+        num_tokens_per_slot=torch.tensor([3], dtype=torch.int32),
+        slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32),
+        no_lora_flag=False,
+    )
+    set_lora_context(
+        token_to_slot=torch.tensor([1], dtype=torch.int32),
+        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32),
+        active_slot_ids=torch.tensor([1], dtype=torch.int32),
+        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32),
+        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32),
+        no_lora_flag=False,
+        domain=PROJ_LORA_DOMAIN,
+    )
+
+    y = layer(torch.tensor([[3.0, 5.0]], dtype=torch.float32))
+    reset_lora_context()
+
+    assert torch.allclose(y.flatten(), torch.tensor([6.0]))
+
+
 def test_lora_availability_reports_missing_backend():
     from nanovllm_voxcpm import lora
 

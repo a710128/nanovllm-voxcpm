@@ -26,7 +26,12 @@ from nanovllm_voxcpm.models.voxcpm.config import (
     VoxCPMConfig,
     LoRAConfig,
 )
-from nanovllm_voxcpm.utils.context import get_context
+from nanovllm_voxcpm.utils.context import (
+    DIT_LORA_DOMAIN,
+    LM_LORA_DOMAIN,
+    PROJ_LORA_DOMAIN,
+    get_context,
+)
 
 
 def rotate_half(x):
@@ -183,6 +188,7 @@ class Cpm4Attention(nn.Module):
         rope_scaling: dict | None = None,
         apply_qk_norm: bool = False,
         lora_config: Optional[LoRAConfig] = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
         tp_size = dist.get_world_size()
@@ -218,6 +224,7 @@ class Cpm4Attention(nn.Module):
                 lora_targets=qkv_lora_targets,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
+                lora_domain=lora_domain,
             )
         else:
             self.qkv_proj = QKVParallelLinear(
@@ -236,6 +243,7 @@ class Cpm4Attention(nn.Module):
                 bias=qkv_bias,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
+                lora_domain=lora_domain,
             )
         else:
             self.o_proj = RowParallelLinear(
@@ -326,6 +334,7 @@ class Cpm4MLP(nn.Module):
         hidden_size: int,
         intermediate_size: int,
         lora_config: Optional[LoRAConfig] = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
 
@@ -348,6 +357,7 @@ class Cpm4MLP(nn.Module):
                 lora_targets=gate_up_lora_targets,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
+                lora_domain=lora_domain,
             )
         else:
             self.gate_up_proj = MergedColumnParallelLinear(
@@ -364,6 +374,7 @@ class Cpm4MLP(nn.Module):
                 bias=False,
                 max_loras=max_loras,
                 max_lora_rank=max_lora_rank,
+                lora_domain=lora_domain,
             )
         else:
             self.down_proj = RowParallelLinear(
@@ -387,6 +398,7 @@ class Cpm4DecoderLayer(nn.Module):
         config: MiniCPM4Config,
         is_causal: bool = True,
         lora_config: Optional[LoRAConfig] = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
         self.self_attn = Cpm4Attention(
@@ -402,11 +414,13 @@ class Cpm4DecoderLayer(nn.Module):
             rope_scaling=getattr(config, "rope_scaling", None),
             apply_qk_norm=getattr(config, "apply_qk_norm", False),
             lora_config=lora_config,
+            lora_domain=lora_domain,
         )
         self.mlp = Cpm4MLP(
             hidden_size=config.hidden_size,
             intermediate_size=config.intermediate_size,
             lora_config=lora_config,
+            lora_domain=lora_domain,
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -440,6 +454,7 @@ class Cpm4Model(nn.Module):
         config: MiniCPM4Config,
         is_causal: bool = True,
         lora_config: Optional[LoRAConfig] = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
         self.config = config
@@ -450,7 +465,10 @@ class Cpm4Model(nn.Module):
             self.embed_tokens = nn.Identity()
 
         self.layers = nn.ModuleList(
-            [Cpm4DecoderLayer(config, is_causal, lora_config) for _ in range(config.num_hidden_layers)]
+            [
+                Cpm4DecoderLayer(config, is_causal, lora_config, lora_domain=lora_domain)
+                for _ in range(config.num_hidden_layers)
+            ]
         )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -539,7 +557,6 @@ class VoxCPMLocDiT(nn.Module):
             in_channels=config.hidden_size,
             time_embed_dim=config.hidden_size,
         )
-
         assert config.vocab_size == 0, "vocab_size must be 0 for local DiT"
         # Create DiT-specific LoRA config if provided
         dit_lora_config = None
@@ -552,7 +569,7 @@ class VoxCPMLocDiT(nn.Module):
                 target_modules_lm=lora_config.target_modules_dit,  # Use DiT targets
                 target_modules_dit=[],
             )
-        self.decoder = Cpm4Model(config, is_causal=False, lora_config=dit_lora_config)
+        self.decoder = Cpm4Model(config, is_causal=False, lora_config=dit_lora_config, lora_domain=DIT_LORA_DOMAIN)
 
     def forward(
         self,
@@ -838,6 +855,7 @@ class VoxCPMModel(nn.Module):
                 config.lm_config.hidden_size,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
+                lora_domain=LM_LORA_DOMAIN,
             )
         else:
             self.enc_to_lm_proj = nn.Linear(config.encoder_config.hidden_dim, config.lm_config.hidden_size)
@@ -849,6 +867,7 @@ class VoxCPMModel(nn.Module):
                 config.dit_config.hidden_dim,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
+                lora_domain=PROJ_LORA_DOMAIN,
             )
         else:
             self.lm_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)
@@ -860,6 +879,7 @@ class VoxCPMModel(nn.Module):
                 config.dit_config.hidden_dim,
                 max_loras=proj_max_loras,
                 max_lora_rank=proj_max_lora_rank,
+                lora_domain=PROJ_LORA_DOMAIN,
             )
         else:
             self.res_to_dit_proj = nn.Linear(config.lm_config.hidden_size, config.dit_config.hidden_dim)

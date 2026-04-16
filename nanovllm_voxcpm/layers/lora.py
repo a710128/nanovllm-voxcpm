@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from nanovllm_voxcpm.lora import LoRAMetadata, get_backend
-from nanovllm_voxcpm.utils.context import get_lora_context
+from nanovllm_voxcpm.utils.context import LM_LORA_DOMAIN, get_lora_context
 from nanovllm_voxcpm.utils.torch_param import set_weight_loader
 
 ShardId = str | int
@@ -59,11 +59,18 @@ class _LoRALayerBase(nn.Module):
     lora_scaling: torch.Tensor
     effective_lora_rank: torch.Tensor
 
-    def __init__(self, max_loras: int, max_lora_rank: int, supports_lora: bool):
+    def __init__(
+        self,
+        max_loras: int,
+        max_lora_rank: int,
+        supports_lora: bool,
+        lora_domain: str = LM_LORA_DOMAIN,
+    ):
         super().__init__()
         self.max_loras = max_loras
         self.max_lora_rank = max_lora_rank
         self.supports_lora = supports_lora
+        self.lora_domain = lora_domain
         self.register_buffer("lora_scaling", torch.zeros(max_loras), persistent=False)
         self.register_buffer("lora_base_scaling", torch.zeros(max_loras), persistent=False)
         self.register_buffer("effective_lora_rank", torch.zeros(max_loras, dtype=torch.int32), persistent=False)
@@ -80,7 +87,7 @@ class _LoRALayerBase(nn.Module):
     def _resolve_token_slots(self, x_flat: torch.Tensor) -> torch.Tensor | None:
         if not self.supports_lora:
             return None
-        context = get_lora_context()
+        context = get_lora_context(self.lora_domain)
         if context.token_to_slot is not None:
             token_to_slot = context.token_to_slot
             if context.no_lora_flag:
@@ -140,7 +147,7 @@ class _LoRALayerBase(nn.Module):
         self._validate_effective_rank(effective_rank)
 
     def _runtime_metadata(self) -> LoRAMetadata | None:
-        context = get_lora_context()
+        context = get_lora_context(self.lora_domain)
         if context.token_to_slot is None:
             return None
         return LoRAMetadata(
@@ -204,11 +211,17 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         lora_targets: Optional[list[str]] = None,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ):
         resolved_max_lora_rank = max_lora_rank or 0
         resolved_lora_targets = lora_targets or ["q", "k", "v"]
         supports_lora = resolved_max_lora_rank > 0 and len(resolved_lora_targets) > 0
-        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
+        super().__init__(
+            max_loras=max_loras,
+            max_lora_rank=resolved_max_lora_rank,
+            supports_lora=supports_lora,
+            lora_domain=lora_domain,
+        )
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.hidden_size = hidden_size
@@ -404,11 +417,17 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         lora_targets: Optional[list[int]] = None,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ):
         resolved_max_lora_rank = max_lora_rank or 0
         resolved_lora_targets = lora_targets if lora_targets is not None else list(range(len(output_sizes)))
         supports_lora = resolved_max_lora_rank > 0 and len(resolved_lora_targets) > 0
-        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
+        super().__init__(
+            max_loras=max_loras,
+            max_lora_rank=resolved_max_lora_rank,
+            supports_lora=supports_lora,
+            lora_domain=lora_domain,
+        )
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.output_sizes = output_sizes
@@ -570,10 +589,16 @@ class LoRARowParallelLinear(_LoRALayerBase):
         bias: bool = False,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ):
         resolved_max_lora_rank = max_lora_rank or 0
         supports_lora = resolved_max_lora_rank > 0
-        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
+        super().__init__(
+            max_loras=max_loras,
+            max_lora_rank=resolved_max_lora_rank,
+            supports_lora=supports_lora,
+            lora_domain=lora_domain,
+        )
         self.tp_size = _get_world_size()
         self.tp_rank = _get_rank()
         self.input_size = input_size
@@ -694,10 +719,16 @@ class LoRALinear(_LoRALayerBase):
         bias: bool = True,
         max_loras: int = 1,
         max_lora_rank: int | None = None,
+        lora_domain: str = LM_LORA_DOMAIN,
     ):
         resolved_max_lora_rank = max_lora_rank or 0
         supports_lora = resolved_max_lora_rank > 0
-        super().__init__(max_loras=max_loras, max_lora_rank=resolved_max_lora_rank, supports_lora=supports_lora)
+        super().__init__(
+            max_loras=max_loras,
+            max_lora_rank=resolved_max_lora_rank,
+            supports_lora=supports_lora,
+            lora_domain=lora_domain,
+        )
         self.in_features = in_features
         self.out_features = out_features
 

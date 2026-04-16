@@ -68,7 +68,7 @@ def test_voxcpm2_model_disables_rope_only_for_residual_lm(monkeypatch):
     captured_use_rope = []
 
     class FakeCpm4Model(torch.nn.Module):
-        def __init__(self, config, is_causal=True, lora_config=None, use_rope=True):
+        def __init__(self, config, is_causal=True, lora_config=None, use_rope=True, lora_domain="lm_domain"):
             super().__init__()
             captured_use_rope.append(use_rope)
             self.embed_tokens = torch.nn.Identity()

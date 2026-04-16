@@ -29,6 +29,7 @@ class VoxCPMPayload:
 
 class VoxCPMRunner(BaseModelRunner):
     model: VoxCPMModel
+    dit_lora_seq_len_offset = 1
 
     def __init__(
         self,

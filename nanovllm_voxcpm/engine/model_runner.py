@@ -75,6 +75,7 @@ Concrete example: VoxCPM
 import os
 import pickle
 import tempfile
+from dataclasses import asdict
 import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
@@ -85,6 +86,11 @@ from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRARuntime
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.lora import is_available as is_lora_available
 from nanovllm_voxcpm.utils.context import (
+    DIT_LORA_DOMAIN,
+    LM_LORA_DOMAIN,
+    PROJ_LORA_DOMAIN,
+    LoRAContext,
+    build_lora_context_from_token_to_slot,
     get_context,
     get_lora_context,
     reset_all_contexts,
@@ -94,6 +100,7 @@ from nanovllm_voxcpm.utils.context import (
 from typing import Generic, TypeVar
 
 PlayloadType = TypeVar("PlayloadType")
+LORA_DOMAINS = (LM_LORA_DOMAIN, PROJ_LORA_DOMAIN, DIT_LORA_DOMAIN)
 
 
 def select_lora_payload_for_rank(payload, rank: int):
@@ -156,6 +163,9 @@ def _clear_lora_slot_modules(modules, slot_id: int) -> None:
 
 
 class BaseModelRunner:
+    dit_lora_seq_len_offset = 0
+    cfg_branches = 2
+
     model: torch.nn.Module
 
     def __init__(
@@ -222,11 +232,44 @@ class BaseModelRunner:
     def run(self, seqs: list[RunnerTask], is_prefill: bool):
         raise NotImplementedError()
 
-    def _prepare_default_lora_context(self, num_tokens: int) -> None:
-        set_lora_context(
-            no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool, device="cpu"),
-            num_active_loras_cpu=torch.tensor([0], dtype=torch.int32, device="cpu"),
+    def _lora_context_from_slots(self, token_to_slot: list[int]) -> LoRAContext:
+        token_to_slot_tensor = torch.tensor(token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        return build_lora_context_from_token_to_slot(
+            token_to_slot_tensor,
+            max_lora_rank=self.max_lora_rank,
+            dtype=self.dtype,
         )
+
+    def _dit_lora_rows_per_sample(self) -> int:
+        lora_config = getattr(self, "lora_config", None)
+        if not (lora_config and getattr(lora_config, "enable_dit", False)):
+            return 0
+        return self.cfg_branches * (self.dit_lora_seq_len_offset + 2 * self.patch_size)
+
+    def _build_lora_contexts(self, seqs: list[RunnerTask], token_counts: list[int]) -> dict[str, LoRAContext]:
+        adapter_ids = [seq.adapter_id for seq in seqs]
+        dit_rows_per_sample = self._dit_lora_rows_per_sample()
+        if not any(adapter_id is not None for adapter_id in adapter_ids):
+            sample_to_slot = [-1 for _ in adapter_ids]
+            return {
+                LM_LORA_DOMAIN: self._lora_context_from_slots([-1] * sum(token_counts)),
+                PROJ_LORA_DOMAIN: self._lora_context_from_slots(sample_to_slot),
+                DIT_LORA_DOMAIN: self._lora_context_from_slots(
+                    [slot for slot in sample_to_slot for _ in range(dit_rows_per_sample)]
+                ),
+            }
+
+        plan = self.lora_runtime.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
+        sample_to_slot = [
+            plan.adapter_to_slot.get(adapter_id, -1) if adapter_id is not None else -1 for adapter_id in adapter_ids
+        ]
+        return {
+            LM_LORA_DOMAIN: self._lora_context_from_slots(plan.token_to_slot),
+            PROJ_LORA_DOMAIN: self._lora_context_from_slots(sample_to_slot),
+            DIT_LORA_DOMAIN: self._lora_context_from_slots(
+                [slot for slot in sample_to_slot for _ in range(dit_rows_per_sample)]
+            ),
+        }
 
     def validate_lora_payload(
         self, payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...]
@@ -302,44 +345,6 @@ class BaseModelRunner:
                 effective_rank=module_payload.effective_rank,
                 scaling=module_payload.scaling,
             )
-
-    def _prepare_lora_context(self, seqs: list[RunnerTask], token_counts: list[int]) -> None:
-        adapter_ids = [seq.adapter_id for seq in seqs]
-        if not any(adapter_id is not None for adapter_id in adapter_ids):
-            self._prepare_default_lora_context(sum(token_counts))
-            return
-
-        plan = self.lora_runtime.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
-        token_to_slot = torch.tensor(plan.token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        if plan.active_slot_ids:
-            active_slot_ids = torch.tensor(plan.active_slot_ids, dtype=torch.int32, pin_memory=True).cuda(
-                non_blocking=True
-            )
-            num_tokens_per_slot = torch.tensor(plan.num_tokens_per_slot, dtype=torch.int32, pin_memory=True).cuda(
-                non_blocking=True
-            )
-            slot_start_offsets = torch.tensor(plan.slot_start_offsets, dtype=torch.int32, pin_memory=True).cuda(
-                non_blocking=True
-            )
-            token_indices_sorted_by_slot = torch.tensor(
-                plan.token_indices_sorted_by_slot, dtype=torch.int32, pin_memory=True
-            ).cuda(non_blocking=True)
-        else:
-            active_slot_ids = None
-            num_tokens_per_slot = None
-            slot_start_offsets = None
-            token_indices_sorted_by_slot = None
-        set_lora_context(
-            token_to_slot=token_to_slot,
-            token_indices_sorted_by_slot=token_indices_sorted_by_slot,
-            active_slot_ids=active_slot_ids,
-            num_tokens_per_slot=num_tokens_per_slot,
-            slot_start_offsets=slot_start_offsets,
-            no_lora_flag=not plan.active_slot_ids,
-            scratch_buffer=torch.zeros(sum(token_counts), self.max_lora_rank, dtype=self.dtype, device="cuda"),
-            no_lora_flag_cpu=torch.tensor([not plan.active_slot_ids], dtype=torch.bool, device="cpu"),
-            num_active_loras_cpu=torch.tensor([len(plan.active_slot_ids)], dtype=torch.int32, device="cpu"),
-        )
 
     @torch.inference_mode()
     def warmup_model(self):
@@ -535,7 +540,8 @@ class BaseModelRunner:
             block_tables,
         )
         token_counts = [seq.seq_length - seq.num_cached_tokens for seq in seqs]
-        self._prepare_lora_context(seqs, token_counts)
+        for domain, lora_context in self._build_lora_contexts(seqs, token_counts).items():
+            set_lora_context(domain=domain, **asdict(lora_context))
         return positions
 
     def prepare_decode_context(self, seqs: list[RunnerTask]):
@@ -556,14 +562,90 @@ class BaseModelRunner:
             context_lens=context_lens,
             block_tables=block_tables,
         )
-        self._prepare_lora_context(seqs, [1 for _ in seqs])
+        for domain, lora_context in self._build_lora_contexts(seqs, [1 for _ in seqs]).items():
+            set_lora_context(domain=domain, **asdict(lora_context))
         return positions
+
+    def _make_graph_domain_buffers(self, max_rows: int) -> dict[str, torch.Tensor]:
+        return {
+            "token_to_slot": torch.full((max_rows,), -1, dtype=torch.int32),
+            "token_indices_sorted_by_slot": torch.arange(max_rows, dtype=torch.int32),
+            "active_slot_ids": torch.zeros(max_rows, dtype=torch.int32),
+            "num_tokens_per_slot": torch.zeros(max_rows, dtype=torch.int32),
+            "slot_start_offsets": torch.zeros(max_rows + 1, dtype=torch.int32),
+            "scratch": torch.zeros(max_rows, self.max_lora_rank, dtype=self.dtype),
+            "no_lora_flag_cpu": torch.tensor([True], dtype=torch.bool, device="cpu"),
+            "num_active_loras_cpu": torch.tensor([0], dtype=torch.int32, device="cpu"),
+        }
+
+    def _copy_lora_domain_to_graph_vars(
+        self,
+        graph_vars: dict,
+        domain: str,
+        context: LoRAContext,
+    ) -> None:
+        domain_vars = graph_vars["lora_domains"][domain]
+        token_count = 0 if context.token_to_slot is None else context.token_to_slot.size(0)
+        domain_vars["token_to_slot"].fill_(-1)
+        if context.token_to_slot is not None:
+            domain_vars["token_to_slot"][:token_count] = context.token_to_slot
+        domain_vars["token_indices_sorted_by_slot"][: domain_vars["token_indices_sorted_by_slot"].size(0)] = (
+            torch.arange(
+                domain_vars["token_indices_sorted_by_slot"].size(0),
+                dtype=torch.int32,
+                device=domain_vars["token_indices_sorted_by_slot"].device,
+            )
+        )
+        if context.token_indices_sorted_by_slot is not None:
+            domain_vars["token_indices_sorted_by_slot"][: context.token_indices_sorted_by_slot.size(0)] = (
+                context.token_indices_sorted_by_slot.to(domain_vars["token_indices_sorted_by_slot"].device)
+            )
+        domain_vars["active_slot_ids"].zero_()
+        if context.active_slot_ids is not None:
+            domain_vars["active_slot_ids"][: context.active_slot_ids.size(0)] = context.active_slot_ids.to(
+                domain_vars["active_slot_ids"].device
+            )
+        domain_vars["num_tokens_per_slot"].zero_()
+        if context.num_tokens_per_slot is not None:
+            domain_vars["num_tokens_per_slot"][: context.num_tokens_per_slot.size(0)] = context.num_tokens_per_slot.to(
+                domain_vars["num_tokens_per_slot"].device
+            )
+        domain_vars["slot_start_offsets"].zero_()
+        if context.slot_start_offsets is not None:
+            domain_vars["slot_start_offsets"][: context.slot_start_offsets.size(0)] = context.slot_start_offsets.to(
+                domain_vars["slot_start_offsets"].device
+            )
+        domain_vars["no_lora_flag_cpu"].fill_(context.no_lora_flag)
+        num_active_slots = 0 if context.active_slot_ids is None else context.active_slot_ids.size(0)
+        domain_vars["num_active_loras_cpu"].fill_(num_active_slots)
+
+    def _set_graph_lora_contexts(self, graph_vars: dict, contexts: dict[str, LoRAContext]) -> None:
+        for domain in LORA_DOMAINS:
+            context = contexts[domain]
+            self._copy_lora_domain_to_graph_vars(graph_vars, domain, context)
+            domain_vars = graph_vars["lora_domains"][domain]
+            num_active_slots = 0 if context.active_slot_ids is None else context.active_slot_ids.size(0)
+            num_slot_offsets = 1 if context.slot_start_offsets is None else context.slot_start_offsets.size(0)
+            token_count = 0 if context.token_to_slot is None else context.token_to_slot.size(0)
+            set_lora_context(
+                domain=domain,
+                token_to_slot=domain_vars["token_to_slot"][:token_count],
+                token_indices_sorted_by_slot=domain_vars["token_indices_sorted_by_slot"][:token_count],
+                active_slot_ids=domain_vars["active_slot_ids"][:num_active_slots],
+                num_tokens_per_slot=domain_vars["num_tokens_per_slot"][:num_active_slots],
+                slot_start_offsets=domain_vars["slot_start_offsets"][:num_slot_offsets],
+                no_lora_flag=context.no_lora_flag,
+                scratch_buffer=domain_vars["scratch"][:token_count],
+                no_lora_flag_cpu=domain_vars["no_lora_flag_cpu"],
+                num_active_loras_cpu=domain_vars["num_active_loras_cpu"],
+            )
 
     @torch.inference_mode()
     def capture_cudagraph(self):
         config = self._config
         max_bs = min(config.max_num_seqs, 512)
         max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
+        max_dit_lora_rows = self._dit_lora_rows_per_sample() * max_bs
         positions = torch.zeros(max_bs, dtype=torch.int64)
         inputs = {
             "positions": positions,
@@ -573,14 +655,11 @@ class BaseModelRunner:
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
-        lora_token_to_slot = torch.full((max_bs,), -1, dtype=torch.int32)
-        lora_token_indices_sorted_by_slot = torch.arange(max_bs, dtype=torch.int32)
-        lora_active_slot_ids = torch.zeros(max_bs, dtype=torch.int32)
-        lora_num_tokens_per_slot = torch.zeros(max_bs, dtype=torch.int32)
-        lora_slot_start_offsets = torch.zeros(max_bs + 1, dtype=torch.int32)
-        lora_scratch = torch.zeros(max_bs, self.max_lora_rank, dtype=self.dtype)
-        lora_no_lora_flag_cpu = torch.tensor([True], dtype=torch.bool, device="cpu")
-        lora_num_active_loras_cpu = torch.tensor([0], dtype=torch.int32, device="cpu")
+        lora_domains = {
+            LM_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs),
+            PROJ_LORA_DOMAIN: self._make_graph_domain_buffers(max_bs),
+            DIT_LORA_DOMAIN: self._make_graph_domain_buffers(max_dit_lora_rows),
+        }
         outputs = self.make_dummy_outputs(max_bs)
 
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
@@ -596,16 +675,13 @@ class BaseModelRunner:
                 context_lens=context_lens[:bs],
                 block_tables=block_tables[:bs],
             )
-            set_lora_context(
-                token_to_slot=lora_token_to_slot[:bs],
-                token_indices_sorted_by_slot=lora_token_indices_sorted_by_slot[:bs],
-                active_slot_ids=lora_active_slot_ids[:bs],
-                num_tokens_per_slot=lora_num_tokens_per_slot[:bs],
-                slot_start_offsets=lora_slot_start_offsets[: bs + 1],
-                no_lora_flag=True,
-                scratch_buffer=lora_scratch[:bs],
-                no_lora_flag_cpu=lora_no_lora_flag_cpu,
-                num_active_loras_cpu=lora_num_active_loras_cpu,
+            self._set_graph_lora_contexts(
+                {"lora_domains": lora_domains},
+                {
+                    LM_LORA_DOMAIN: self._lora_context_from_slots([-1] * bs),
+                    PROJ_LORA_DOMAIN: self._lora_context_from_slots([-1] * bs),
+                    DIT_LORA_DOMAIN: self._lora_context_from_slots([-1] * (self._dit_lora_rows_per_sample() * bs)),
+                },
             )
 
             if isinstance(outputs, torch.Tensor):
@@ -625,44 +701,21 @@ class BaseModelRunner:
 
             if capture_lora_graphs:
                 lora_graph = torch.cuda.CUDAGraph()
-                num_active_slots = min(getattr(config.lora_config, "max_loras", 1), bs)
-                if num_active_slots <= 0:
-                    num_active_slots = 1
-                lora_active_slot_ids.zero_()
-                lora_active_slot_ids[:num_active_slots] = torch.arange(num_active_slots, dtype=torch.int32)
-                lora_num_tokens_per_slot.zero_()
-                base_tokens_per_slot = bs // num_active_slots
-                extra_tokens = bs % num_active_slots
-                for slot_id in range(num_active_slots):
-                    lora_num_tokens_per_slot[slot_id] = base_tokens_per_slot + (1 if slot_id < extra_tokens else 0)
-                lora_slot_start_offsets.zero_()
-                lora_slot_start_offsets[1 : num_active_slots + 1] = torch.cumsum(
-                    lora_num_tokens_per_slot[:num_active_slots], dim=0
-                )
-                for slot_id in range(num_active_slots):
-                    start = int(lora_slot_start_offsets[slot_id].item())
-                    end = int(lora_slot_start_offsets[slot_id + 1].item())
-                    lora_token_to_slot[start:end] = slot_id
-                lora_token_indices_sorted_by_slot[:bs] = torch.arange(bs, dtype=torch.int32)
-                lora_no_lora_flag_cpu.fill_(False)
-                lora_num_active_loras_cpu.fill_(num_active_slots)
+                dummy_sample_to_slot = [0 for _ in range(bs)]
+                dummy_contexts = {
+                    LM_LORA_DOMAIN: self._lora_context_from_slots([0 for _ in range(bs)]),
+                    PROJ_LORA_DOMAIN: self._lora_context_from_slots(dummy_sample_to_slot),
+                    DIT_LORA_DOMAIN: self._lora_context_from_slots(
+                        [slot for slot in dummy_sample_to_slot for _ in range(self._dit_lora_rows_per_sample())]
+                    ),
+                }
                 set_context(
                     False,
                     slot_mapping=slot_mapping[:bs],
                     context_lens=context_lens[:bs],
                     block_tables=block_tables[:bs],
                 )
-                set_lora_context(
-                    token_to_slot=lora_token_to_slot[:bs],
-                    token_indices_sorted_by_slot=lora_token_indices_sorted_by_slot[:bs],
-                    active_slot_ids=lora_active_slot_ids[:num_active_slots],
-                    num_tokens_per_slot=lora_num_tokens_per_slot[:num_active_slots],
-                    slot_start_offsets=lora_slot_start_offsets[: num_active_slots + 1],
-                    no_lora_flag=False,
-                    scratch_buffer=lora_scratch[:bs],
-                    no_lora_flag_cpu=lora_no_lora_flag_cpu,
-                    num_active_loras_cpu=lora_num_active_loras_cpu,
-                )
+                self._set_graph_lora_contexts({"lora_domains": lora_domains}, dummy_contexts)
                 if isinstance(outputs, torch.Tensor):
                     outputs[:bs] = self.model(**cut_inputs(inputs, bs))
                 else:
@@ -682,32 +735,26 @@ class BaseModelRunner:
             slot_mapping=slot_mapping,
             context_lens=context_lens,
             block_tables=block_tables,
-            lora_token_to_slot=lora_token_to_slot,
-            lora_token_indices_sorted_by_slot=lora_token_indices_sorted_by_slot,
-            lora_active_slot_ids=lora_active_slot_ids,
-            lora_num_tokens_per_slot=lora_num_tokens_per_slot,
-            lora_slot_start_offsets=lora_slot_start_offsets,
-            lora_scratch=lora_scratch,
-            lora_no_lora_flag_cpu=lora_no_lora_flag_cpu,
-            lora_num_active_loras_cpu=lora_num_active_loras_cpu,
+            lora_domains=lora_domains,
             outputs=outputs,
         )
 
     @torch.inference_mode()
     def run_model(self, inputs: dict, is_prefill: bool):
-        lora_context = get_lora_context()
-        has_active_lora = not lora_context.no_lora_flag and lora_context.token_to_slot is not None
+        lora_contexts = {domain: get_lora_context(domain) for domain in LORA_DOMAINS}
+        has_active_lora = any(
+            not context.no_lora_flag and context.token_to_slot is not None for context in lora_contexts.values()
+        )
         has_lora_graph = has_active_lora and bool(self.graphs.get("lora"))
-        if (
-            is_prefill
-            or self.enforce_eager
-            or inputs["positions"].size(0) > 512
-            or (has_active_lora and not has_lora_graph)
-        ):
-            ret = self.model(**inputs)
-            reset_all_contexts()
-            return ret
-        else:
+        try:
+            if (
+                is_prefill
+                or self.enforce_eager
+                or inputs["positions"].size(0) > 512
+                or (has_active_lora and not has_lora_graph)
+            ):
+                return self.model(**inputs)
+
             bs = inputs["positions"].size(0)
             context = get_context()
             graph_kind = "lora" if has_active_lora else "base"
@@ -722,54 +769,11 @@ class BaseModelRunner:
             graph_vars["context_lens"].zero_()
             graph_vars["context_lens"][:bs] = context.context_lens
             graph_vars["block_tables"][:bs, : context.block_tables.size(1)] = context.block_tables
-            graph_vars["lora_token_to_slot"].fill_(-1)
-            if lora_context.token_to_slot is not None:
-                graph_vars["lora_token_to_slot"][: lora_context.token_to_slot.size(0)] = lora_context.token_to_slot
-            graph_vars["lora_token_indices_sorted_by_slot"][:bs] = torch.arange(
-                bs,
-                dtype=torch.int32,
-            )
-            if lora_context.token_indices_sorted_by_slot is not None:
-                graph_vars["lora_token_indices_sorted_by_slot"][: lora_context.token_indices_sorted_by_slot.size(0)] = (
-                    lora_context.token_indices_sorted_by_slot.to(graph_vars["lora_token_indices_sorted_by_slot"].device)
-                )
-            graph_vars["lora_active_slot_ids"].zero_()
-            if lora_context.active_slot_ids is not None:
-                graph_vars["lora_active_slot_ids"][: lora_context.active_slot_ids.size(0)] = (
-                    lora_context.active_slot_ids.to(graph_vars["lora_active_slot_ids"].device)
-                )
-            graph_vars["lora_num_tokens_per_slot"].zero_()
-            if lora_context.num_tokens_per_slot is not None:
-                graph_vars["lora_num_tokens_per_slot"][: lora_context.num_tokens_per_slot.size(0)] = (
-                    lora_context.num_tokens_per_slot.to(graph_vars["lora_num_tokens_per_slot"].device)
-                )
-            graph_vars["lora_slot_start_offsets"].zero_()
-            if lora_context.slot_start_offsets is not None:
-                graph_vars["lora_slot_start_offsets"][: lora_context.slot_start_offsets.size(0)] = (
-                    lora_context.slot_start_offsets.to(graph_vars["lora_slot_start_offsets"].device)
-                )
-            num_active_slots = lora_context.active_slot_ids.size(0) if lora_context.active_slot_ids is not None else 0
-            num_slot_offsets = (
-                lora_context.slot_start_offsets.size(0) if lora_context.slot_start_offsets is not None else 1
-            )
-            graph_vars["lora_no_lora_flag_cpu"].fill_(lora_context.no_lora_flag)
-            graph_vars["lora_num_active_loras_cpu"].fill_(num_active_slots)
-            set_lora_context(
-                token_to_slot=graph_vars["lora_token_to_slot"][:bs],
-                token_indices_sorted_by_slot=graph_vars["lora_token_indices_sorted_by_slot"][:bs],
-                active_slot_ids=graph_vars["lora_active_slot_ids"][:num_active_slots],
-                num_tokens_per_slot=graph_vars["lora_num_tokens_per_slot"][:num_active_slots],
-                slot_start_offsets=graph_vars["lora_slot_start_offsets"][:num_slot_offsets],
-                no_lora_flag=lora_context.no_lora_flag,
-                scratch_buffer=graph_vars["lora_scratch"][:bs],
-                no_lora_flag_cpu=graph_vars["lora_no_lora_flag_cpu"],
-                num_active_loras_cpu=graph_vars["lora_num_active_loras_cpu"],
-            )
+            self._set_graph_lora_contexts(graph_vars, lora_contexts)
             graph.replay()
-            # ret = graph_vars["outputs"][:bs]
             if isinstance(graph_vars["outputs"], torch.Tensor):
-                ret = graph_vars["outputs"][:bs]
+                return graph_vars["outputs"][:bs]
             else:
-                ret = cut_inputs(graph_vars["outputs"], bs)
+                return cut_inputs(graph_vars["outputs"], bs)
+        finally:
             reset_all_contexts()
-            return ret

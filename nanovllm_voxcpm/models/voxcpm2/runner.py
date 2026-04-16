@@ -25,6 +25,7 @@ class VoxCPM2Payload:
 
 class VoxCPM2Runner(BaseModelRunner):
     model: VoxCPM2Model
+    dit_lora_seq_len_offset = 3
 
     def __init__(
         self,

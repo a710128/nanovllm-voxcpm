@@ -284,8 +284,8 @@ def test_lora_capture_cudagraph_keeps_host_flags_on_cpu():
         torch.set_default_device(default_device)
         set_backend_for_testing(_FakePunicaBackend())
 
-    assert runner.graph_vars["lora_no_lora_flag_cpu"].device.type == "cpu"
-    assert runner.graph_vars["lora_num_active_loras_cpu"].device.type == "cpu"
+    assert runner.graph_vars["lora_domains"]["lm_domain"]["no_lora_flag_cpu"].device.type == "cpu"
+    assert runner.graph_vars["lora_domains"]["lm_domain"]["num_active_loras_cpu"].device.type == "cpu"
     assert 1 in runner.graphs["lora"]
 
 
