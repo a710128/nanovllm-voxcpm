@@ -51,6 +51,63 @@ def _reset_lora_context():
     reset_lora_context()
 
 
+class _TinyDecodeModel(torch.nn.Module):
+    def __init__(self, *, max_loras: int, max_lora_rank: int):
+        from nanovllm_voxcpm.layers.lora import LoRALinear
+
+        super().__init__()
+        self.embed = torch.nn.Embedding(32, 4)
+        self.proj = LoRALinear(
+            in_features=4,
+            out_features=3,
+            bias=False,
+            max_loras=max_loras,
+            max_lora_rank=max_lora_rank,
+        )
+        self.output = torch.nn.Linear(3, 2, bias=False)
+        with torch.no_grad():
+            self.proj.weight.normal_(mean=0.0, std=0.1)
+            self.output.weight.normal_(mean=0.0, std=0.1)
+
+    def forward(self, positions, tokens):
+        hidden = self.embed(tokens)
+        hidden = hidden + positions.unsqueeze(-1).to(hidden.dtype)
+        hidden = self.proj(hidden)
+        return self.output(hidden)
+
+
+def _make_random_lora_payload():
+    from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload
+
+    generator = torch.Generator().manual_seed(1234)
+    lora_a = torch.randn(2, 4, generator=generator, dtype=torch.float32)
+    lora_b = torch.randn(3, 2, generator=generator, dtype=torch.float32)
+    return LoRAModelPayload(
+        modules={
+            "proj": LoRAModulePayload(
+                lora_a=lora_a,
+                lora_b=lora_b,
+                effective_rank=2,
+                scaling=0.5,
+            )
+        },
+        rank=2,
+        alpha=1.0,
+    )
+
+
+class _TinyCaptureRunner:
+    dtype = torch.float32
+
+    def make_dummy_inputs(self, batch_size: int, length: int):
+        return {
+            "tokens": torch.zeros(batch_size, dtype=torch.int64, device="cuda"),
+        }
+
+    def make_dummy_outputs(self, batch_size: int):
+        return torch.zeros(batch_size, 2, dtype=self.dtype, device="cuda")
+
+
 def test_lora_linear_cuda_modes_and_rank_alpha():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.utils.context import set_lora_context
@@ -166,6 +223,119 @@ def test_lora_linear_cuda_graph_replay():
     graph.replay()
     assert torch.allclose(out_buffer.cpu().flatten(), torch.tensor([4.0, 57.0]))
     set_backend_for_testing(_FakePunicaBackend())
+
+
+def test_lora_capture_cudagraph_keeps_host_flags_on_cpu():
+    from types import SimpleNamespace
+
+    from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    runner = object.__new__(_TinyCaptureRunner)
+    runner.__class__ = type("_TinyCaptureRunnerInstance", (_TinyCaptureRunner, BaseModelRunner), {})
+    runner.max_lora_rank = 2
+    runner.max_loras = 1
+    runner.block_size = 256
+    runner.model = _TinyDecodeModel(max_loras=1, max_lora_rank=2).cuda()
+    runner._config = SimpleNamespace(
+        max_num_seqs=8,
+        max_model_len=8,
+        lora_config=SimpleNamespace(max_loras=1, max_lora_rank=2),
+    )
+
+    default_device = torch.empty(()).device
+    torch.set_default_device("cuda")
+    try:
+        runner.capture_cudagraph()
+    finally:
+        torch.set_default_device(default_device)
+        set_backend_for_testing(_FakePunicaBackend())
+
+    assert runner.graph_vars["lora_no_lora_flag_cpu"].device.type == "cpu"
+    assert runner.graph_vars["lora_num_active_loras_cpu"].device.type == "cpu"
+    assert 1 in runner.graphs["lora"]
+
+
+def test_lora_decode_smoke_cuda_graph_capture_and_two_decode_steps():
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+    from nanovllm_voxcpm.utils.context import set_lora_context
+
+    torch.manual_seed(2024)
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    try:
+        model = _TinyDecodeModel(max_loras=1, max_lora_rank=2).cuda()
+        payload = _make_random_lora_payload()
+        module_payload = payload.modules["proj"]
+        with torch.no_grad():
+            model.proj.set_slot_lora(
+                slot_id=0,
+                lora_a=module_payload.lora_a.cuda(),
+                lora_b=module_payload.lora_b.cuda(),
+                effective_rank=module_payload.effective_rank,
+                scaling=module_payload.scaling,
+            )
+
+        set_lora_context()
+        base_step1 = model(
+            torch.tensor([0], dtype=torch.int64, device="cuda"),
+            torch.tensor([3], dtype=torch.int64, device="cuda"),
+        ).cpu()
+        base_step2 = model(
+            torch.tensor([1], dtype=torch.int64, device="cuda"),
+            torch.tensor([5], dtype=torch.int64, device="cuda"),
+        ).cpu()
+
+        set_lora_context(
+            token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            scratch_buffer=torch.zeros(1, 2, dtype=torch.float32, device="cuda"),
+            no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
+            num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        )
+
+        eager_step1 = model(
+            torch.tensor([0], dtype=torch.int64, device="cuda"),
+            torch.tensor([3], dtype=torch.int64, device="cuda"),
+        ).cpu()
+        eager_step2 = model(
+            torch.tensor([1], dtype=torch.int64, device="cuda"),
+            torch.tensor([5], dtype=torch.int64, device="cuda"),
+        ).cpu()
+
+        positions_buffer = torch.zeros(1, dtype=torch.int64, device="cuda")
+        tokens_buffer = torch.zeros(1, dtype=torch.int64, device="cuda")
+        out_buffer = torch.zeros(1, 2, dtype=torch.float32, device="cuda")
+        graph = torch.cuda.CUDAGraph()
+
+        positions_buffer.copy_(torch.tensor([0], dtype=torch.int64, device="cuda"))
+        tokens_buffer.copy_(torch.tensor([3], dtype=torch.int64, device="cuda"))
+        out_buffer.copy_(model(positions_buffer, tokens_buffer))
+        torch.cuda.synchronize()
+        with torch.cuda.graph(graph):
+            out_buffer.copy_(model(positions_buffer, tokens_buffer))
+
+        positions_buffer.copy_(torch.tensor([0], dtype=torch.int64, device="cuda"))
+        tokens_buffer.copy_(torch.tensor([3], dtype=torch.int64, device="cuda"))
+        graph.replay()
+        graph_step1 = out_buffer.cpu()
+
+        positions_buffer.copy_(torch.tensor([1], dtype=torch.int64, device="cuda"))
+        tokens_buffer.copy_(torch.tensor([5], dtype=torch.int64, device="cuda"))
+        graph.replay()
+        graph_step2 = out_buffer.cpu()
+
+        assert torch.allclose(graph_step1, eager_step1, atol=1e-5, rtol=1e-5)
+        assert torch.allclose(graph_step2, eager_step2, atol=1e-5, rtol=1e-5)
+        assert not torch.allclose(eager_step1, base_step1, atol=1e-5, rtol=1e-5)
+        assert not torch.allclose(eager_step2, base_step2, atol=1e-5, rtol=1e-5)
+        assert not torch.allclose(graph_step1, graph_step2)
+    finally:
+        set_backend_for_testing(_FakePunicaBackend())
 
 
 def test_lora_linear_triton_lora_b_pointer_cache_stays_bounded():

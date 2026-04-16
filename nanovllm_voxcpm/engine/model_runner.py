@@ -224,8 +224,8 @@ class BaseModelRunner:
 
     def _prepare_default_lora_context(self, num_tokens: int) -> None:
         set_lora_context(
-            no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool),
-            num_active_loras_cpu=torch.tensor([0], dtype=torch.int32),
+            no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool, device="cpu"),
+            num_active_loras_cpu=torch.tensor([0], dtype=torch.int32, device="cpu"),
         )
 
     def validate_lora_payload(
@@ -337,8 +337,8 @@ class BaseModelRunner:
             slot_start_offsets=slot_start_offsets,
             no_lora_flag=not plan.active_slot_ids,
             scratch_buffer=torch.zeros(sum(token_counts), self.max_lora_rank, dtype=self.dtype, device="cuda"),
-            no_lora_flag_cpu=torch.tensor([not plan.active_slot_ids], dtype=torch.bool),
-            num_active_loras_cpu=torch.tensor([len(plan.active_slot_ids)], dtype=torch.int32),
+            no_lora_flag_cpu=torch.tensor([not plan.active_slot_ids], dtype=torch.bool, device="cpu"),
+            num_active_loras_cpu=torch.tensor([len(plan.active_slot_ids)], dtype=torch.int32, device="cpu"),
         )
 
     @torch.inference_mode()
@@ -579,8 +579,8 @@ class BaseModelRunner:
         lora_num_tokens_per_slot = torch.zeros(max_bs, dtype=torch.int32)
         lora_slot_start_offsets = torch.zeros(max_bs + 1, dtype=torch.int32)
         lora_scratch = torch.zeros(max_bs, self.max_lora_rank, dtype=self.dtype)
-        lora_no_lora_flag_cpu = torch.tensor([True], dtype=torch.bool)
-        lora_num_active_loras_cpu = torch.tensor([0], dtype=torch.int32)
+        lora_no_lora_flag_cpu = torch.tensor([True], dtype=torch.bool, device="cpu")
+        lora_num_active_loras_cpu = torch.tensor([0], dtype=torch.int32, device="cpu")
         outputs = self.make_dummy_outputs(max_bs)
 
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))

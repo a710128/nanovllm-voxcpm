@@ -124,12 +124,14 @@ def _load_collected_modules(checkpoint_dir: Path) -> dict[str, _CollectedModule]
 
 
 def _parse_weight_key(key: str) -> tuple[str, str, str | int, str] | None:
-    if key.endswith(".lora_A.weight"):
+    if key.endswith(".lora_A.weight") or key.endswith(".lora_B.weight"):
+        raise ValueError("Unsupported LoRA tensor suffix; expected keys ending in '.lora_A' or '.lora_B'")
+    if key.endswith(".lora_A"):
         tensor_kind = "a"
-        base_key = key[: -len(".lora_A.weight")]
-    elif key.endswith(".lora_B.weight"):
+        base_key = key[: -len(".lora_A")]
+    elif key.endswith(".lora_B"):
         tensor_kind = "b"
-        base_key = key[: -len(".lora_B.weight")]
+        base_key = key[: -len(".lora_B")]
     else:
         return None
 

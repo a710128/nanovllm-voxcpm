@@ -23,16 +23,16 @@ def test_load_voxcpm2_lora_checkpoint_builds_payload_and_tp_shards(tmp_path):
     checkpoint_dir = _write_checkpoint(
         tmp_path,
         {
-            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
-            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": torch.tensor([[10.0, 11.0], [12.0, 13.0]]),
-            "base_lm.layers.0.self_attn.v_proj.lora_A.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
-            "base_lm.layers.0.self_attn.v_proj.lora_B.weight": torch.tensor([[20.0, 21.0], [22.0, 23.0]]),
-            "residual_lm.layers.0.mlp.down_proj.lora_A.weight": torch.tensor(
+            "base_lm.layers.0.self_attn.q_proj.lora_A": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            "base_lm.layers.0.self_attn.q_proj.lora_B": torch.tensor([[10.0, 11.0], [12.0, 13.0]]),
+            "base_lm.layers.0.self_attn.v_proj.lora_A": torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+            "base_lm.layers.0.self_attn.v_proj.lora_B": torch.tensor([[20.0, 21.0], [22.0, 23.0]]),
+            "residual_lm.layers.0.mlp.down_proj.lora_A": torch.tensor(
                 [[30.0, 31.0, 32.0, 33.0], [34.0, 35.0, 36.0, 37.0]]
             ),
-            "residual_lm.layers.0.mlp.down_proj.lora_B.weight": torch.tensor([[40.0, 41.0], [42.0, 43.0]]),
-            "fusion_concat_proj.lora_A.weight": torch.tensor([[50.0, 51.0], [52.0, 53.0]]),
-            "fusion_concat_proj.lora_B.weight": torch.tensor([[60.0, 61.0], [62.0, 63.0]]),
+            "residual_lm.layers.0.mlp.down_proj.lora_B": torch.tensor([[40.0, 41.0], [42.0, 43.0]]),
+            "fusion_concat_proj.lora_A": torch.tensor([[50.0, 51.0], [52.0, 53.0]]),
+            "fusion_concat_proj.lora_B": torch.tensor([[60.0, 61.0], [62.0, 63.0]]),
         },
     )
 
@@ -64,4 +64,35 @@ def test_load_voxcpm2_lora_checkpoint_requires_lora_config_object(tmp_path):
     (checkpoint_dir / "lora_config.json").write_text(json.dumps({"alpha": 8}), encoding="utf-8")
 
     with pytest.raises(ValueError, match="lora_config"):
+        load_voxcpm2_lora_checkpoint(str(checkpoint_dir))
+
+
+def test_load_voxcpm2_lora_checkpoint_rejects_weight_suffix_keys(tmp_path):
+    from nanovllm_voxcpm.models.voxcpm2.lora_loader import load_voxcpm2_lora_checkpoint
+
+    checkpoint_dir = _write_checkpoint(
+        tmp_path,
+        {
+            "base_lm.layers.0.self_attn.q_proj.lora_A.weight": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            "base_lm.layers.0.self_attn.q_proj.lora_B.weight": torch.tensor([[10.0, 11.0], [12.0, 13.0]]),
+        },
+    )
+
+    with pytest.raises(ValueError, match="Unsupported LoRA tensor suffix"):
+        load_voxcpm2_lora_checkpoint(str(checkpoint_dir))
+
+
+def test_load_voxcpm2_lora_checkpoint_rejects_mixed_weight_suffix_keys(tmp_path):
+    from nanovllm_voxcpm.models.voxcpm2.lora_loader import load_voxcpm2_lora_checkpoint
+
+    checkpoint_dir = _write_checkpoint(
+        tmp_path,
+        {
+            "base_lm.layers.0.self_attn.q_proj.lora_A": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            "base_lm.layers.0.self_attn.q_proj.lora_B": torch.tensor([[10.0, 11.0], [12.0, 13.0]]),
+            "base_lm.layers.0.self_attn.v_proj.lora_A.weight": torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+        },
+    )
+
+    with pytest.raises(ValueError, match="Unsupported LoRA tensor suffix"):
         load_voxcpm2_lora_checkpoint(str(checkpoint_dir))
