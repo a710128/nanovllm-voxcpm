@@ -7,6 +7,7 @@ from typing import Callable
 import torch
 
 from nanovllm_voxcpm.lora import assert_available as assert_lora_available
+from nanovllm_voxcpm.utils.context import LoRAContext
 
 
 class LoRALifecycleState(str, Enum):
@@ -71,6 +72,71 @@ class LoRABatchPlan:
     active_slot_ids: list[int]
     num_tokens_per_slot: list[int]
     slot_start_offsets: list[int]
+
+
+def _build_lora_metadata_from_token_to_slot(
+    token_to_slot: list[int],
+) -> tuple[list[int], list[int], list[int], list[int]]:
+    slot_to_indices: dict[int, list[int]] = {}
+    for token_idx, slot_id in enumerate(token_to_slot):
+        if slot_id >= 0:
+            slot_to_indices.setdefault(slot_id, []).append(token_idx)
+
+    active_slot_ids = sorted(slot_to_indices)
+    num_tokens_per_slot = [len(slot_to_indices[slot_id]) for slot_id in active_slot_ids]
+    token_indices_sorted_by_slot = [token_idx for slot_id in active_slot_ids for token_idx in slot_to_indices[slot_id]]
+    slot_start_offsets = [0]
+    for count in num_tokens_per_slot:
+        slot_start_offsets.append(slot_start_offsets[-1] + count)
+    return token_indices_sorted_by_slot, active_slot_ids, num_tokens_per_slot, slot_start_offsets
+
+
+def build_lora_batch_plan_from_token_to_slot(
+    adapter_to_slot: dict[int, int],
+    token_to_slot: list[int],
+) -> LoRABatchPlan:
+    (
+        token_indices_sorted_by_slot,
+        active_slot_ids,
+        num_tokens_per_slot,
+        slot_start_offsets,
+    ) = _build_lora_metadata_from_token_to_slot(token_to_slot)
+    return LoRABatchPlan(
+        adapter_to_slot=adapter_to_slot,
+        token_to_slot=token_to_slot,
+        token_indices_sorted_by_slot=token_indices_sorted_by_slot,
+        active_slot_ids=active_slot_ids,
+        num_tokens_per_slot=num_tokens_per_slot,
+        slot_start_offsets=slot_start_offsets,
+    )
+
+
+def _cuda_int_tensor(values: list[int]) -> torch.Tensor:
+    return torch.tensor(values, dtype=torch.int32, device="cpu", pin_memory=True).cuda(non_blocking=True)
+
+
+def build_lora_context_from_batch_plan(plan: LoRABatchPlan) -> LoRAContext:
+    token_to_slot_tensor = _cuda_int_tensor(plan.token_to_slot)
+    if not plan.active_slot_ids:
+        return LoRAContext(
+            token_to_slot=token_to_slot_tensor,
+            no_lora_flag=True,
+            num_active_loras=0,
+        )
+
+    return LoRAContext(
+        token_to_slot=token_to_slot_tensor,
+        token_indices_sorted_by_slot=_cuda_int_tensor(plan.token_indices_sorted_by_slot),
+        active_slot_ids=_cuda_int_tensor(plan.active_slot_ids),
+        num_tokens_per_slot=_cuda_int_tensor(plan.num_tokens_per_slot),
+        slot_start_offsets=_cuda_int_tensor(plan.slot_start_offsets),
+        no_lora_flag=False,
+        num_active_loras=len(plan.active_slot_ids),
+    )
+
+
+def build_lora_context_from_slot_list(token_to_slot: list[int]) -> LoRAContext:
+    return build_lora_context_from_batch_plan(build_lora_batch_plan_from_token_to_slot({}, token_to_slot))
 
 
 class _LoRAStateBase:
@@ -290,33 +356,11 @@ class LoRARuntime(_LoRAStateBase):
                 LoRAResidentState.ACTIVE if entry.gpu_running_ref_count > 0 else LoRAResidentState.IDLE
             )
 
-        slot_to_count: dict[int, int] = {}
         token_to_slot: list[int] = []
         for adapter_id, token_count in zip(adapter_ids, token_counts):
             slot_id = adapter_to_slot.get(adapter_id, -1) if adapter_id is not None else -1
             token_to_slot.extend([slot_id] * token_count)
-            if slot_id >= 0:
-                slot_to_count[slot_id] = slot_to_count.get(slot_id, 0) + token_count
-
-        active_slot_ids = sorted(slot_to_count)
-        num_tokens_per_slot = [slot_to_count[slot_id] for slot_id in active_slot_ids]
-        token_indices_sorted_by_slot = [
-            token_idx
-            for slot_id in active_slot_ids
-            for token_idx, mapped_slot_id in enumerate(token_to_slot)
-            if mapped_slot_id == slot_id
-        ]
-        slot_start_offsets = [0]
-        for count in num_tokens_per_slot:
-            slot_start_offsets.append(slot_start_offsets[-1] + count)
-        return LoRABatchPlan(
-            adapter_to_slot=adapter_to_slot,
-            token_to_slot=token_to_slot,
-            token_indices_sorted_by_slot=token_indices_sorted_by_slot,
-            active_slot_ids=active_slot_ids,
-            num_tokens_per_slot=num_tokens_per_slot,
-            slot_start_offsets=slot_start_offsets,
-        )
+        return build_lora_batch_plan_from_token_to_slot(adapter_to_slot, token_to_slot)
 
     def _ensure_slot(self, adapter_id: int, load_lora: Callable[[int, LoRAModelPayload], None]) -> int:
         entry = self.get_entry(adapter_id)

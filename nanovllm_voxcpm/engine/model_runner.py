@@ -81,7 +81,12 @@ from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
 from nanovllm_voxcpm.config import Config
-from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRARuntime
+from nanovllm_voxcpm.engine.lora_manager import (
+    LoRAModelPayload,
+    LoRARuntime,
+    build_lora_context_from_batch_plan,
+    build_lora_context_from_slot_list,
+)
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.lora import is_available as is_lora_available
 from nanovllm_voxcpm.utils.context import (
@@ -89,7 +94,6 @@ from nanovllm_voxcpm.utils.context import (
     LM_LORA_DOMAIN,
     PROJ_LORA_DOMAIN,
     LoRAContext,
-    build_lora_context_from_token_to_slot,
     get_context,
     get_lora_context,
     reset_all_contexts,
@@ -231,12 +235,6 @@ class BaseModelRunner:
     def run(self, seqs: list[RunnerTask], is_prefill: bool):
         raise NotImplementedError()
 
-    def _lora_context_from_slots(self, token_to_slot: list[int]) -> LoRAContext:
-        token_to_slot_tensor = torch.tensor(token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        return build_lora_context_from_token_to_slot(
-            token_to_slot_tensor,
-        )
-
     def _dit_lora_rows_per_sample(self) -> int:
         lora_config = getattr(self, "lora_config", None)
         if not (lora_config and getattr(lora_config, "enable_dit", False)):
@@ -249,9 +247,9 @@ class BaseModelRunner:
         if not any(adapter_id is not None for adapter_id in adapter_ids):
             sample_to_slot = [-1 for _ in adapter_ids]
             return {
-                LM_LORA_DOMAIN: self._lora_context_from_slots([-1] * sum(token_counts)),
-                PROJ_LORA_DOMAIN: self._lora_context_from_slots(sample_to_slot),
-                DIT_LORA_DOMAIN: self._lora_context_from_slots(
+                LM_LORA_DOMAIN: build_lora_context_from_slot_list([-1] * sum(token_counts)),
+                PROJ_LORA_DOMAIN: build_lora_context_from_slot_list(sample_to_slot),
+                DIT_LORA_DOMAIN: build_lora_context_from_slot_list(
                     [slot for slot in sample_to_slot for _ in range(dit_rows_per_sample)]
                 ),
             }
@@ -261,9 +259,9 @@ class BaseModelRunner:
             plan.adapter_to_slot.get(adapter_id, -1) if adapter_id is not None else -1 for adapter_id in adapter_ids
         ]
         return {
-            LM_LORA_DOMAIN: self._lora_context_from_slots(plan.token_to_slot),
-            PROJ_LORA_DOMAIN: self._lora_context_from_slots(sample_to_slot),
-            DIT_LORA_DOMAIN: self._lora_context_from_slots(
+            LM_LORA_DOMAIN: build_lora_context_from_batch_plan(plan),
+            PROJ_LORA_DOMAIN: build_lora_context_from_slot_list(sample_to_slot),
+            DIT_LORA_DOMAIN: build_lora_context_from_slot_list(
                 [slot for slot in sample_to_slot for _ in range(dit_rows_per_sample)]
             ),
         }
@@ -666,9 +664,9 @@ class BaseModelRunner:
             self._set_graph_lora_contexts(
                 {"lora_domains": lora_domains},
                 {
-                    LM_LORA_DOMAIN: self._lora_context_from_slots([-1] * bs),
-                    PROJ_LORA_DOMAIN: self._lora_context_from_slots([-1] * bs),
-                    DIT_LORA_DOMAIN: self._lora_context_from_slots([-1] * (self._dit_lora_rows_per_sample() * bs)),
+                    LM_LORA_DOMAIN: build_lora_context_from_slot_list([-1] * bs),
+                    PROJ_LORA_DOMAIN: build_lora_context_from_slot_list([-1] * bs),
+                    DIT_LORA_DOMAIN: build_lora_context_from_slot_list([-1] * (self._dit_lora_rows_per_sample() * bs)),
                 },
             )
 
@@ -691,9 +689,9 @@ class BaseModelRunner:
                 lora_graph = torch.cuda.CUDAGraph()
                 dummy_sample_to_slot = [0 for _ in range(bs)]
                 dummy_contexts = {
-                    LM_LORA_DOMAIN: self._lora_context_from_slots([0 for _ in range(bs)]),
-                    PROJ_LORA_DOMAIN: self._lora_context_from_slots(dummy_sample_to_slot),
-                    DIT_LORA_DOMAIN: self._lora_context_from_slots(
+                    LM_LORA_DOMAIN: build_lora_context_from_slot_list([0 for _ in range(bs)]),
+                    PROJ_LORA_DOMAIN: build_lora_context_from_slot_list(dummy_sample_to_slot),
+                    DIT_LORA_DOMAIN: build_lora_context_from_slot_list(
                         [slot for slot in dummy_sample_to_slot for _ in range(self._dit_lora_rows_per_sample())]
                     ),
                 }
