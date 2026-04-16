@@ -101,12 +101,12 @@ def lora_expand(
     num_tokens_per_lora: torch.Tensor,
     lora_token_start_loc: torch.Tensor,
     lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    num_active_loras: torch.Tensor,
+    no_lora_flag: bool,
+    num_active_loras: int,
     offset_start: int = 0,
     add_inputs: bool = False,
 ) -> None:
-    if no_lora_flag_cpu.item():
+    if no_lora_flag:
         return
     (
         slice_start_tensor,
@@ -130,7 +130,7 @@ def lora_expand(
     block_n = kernel_config["block_n"]
     block_k = kernel_config["block_k"]
     even_k = K % block_k == 0
-    grid = (triton.cdiv(M, block_m) * triton.cdiv(max_n, block_n), num_slices, num_active_loras.item())
+    grid = (triton.cdiv(M, block_m) * triton.cdiv(max_n, block_n), num_slices, num_active_loras)
     use_gdc = supports_pdl(inputs.device)
     _lora_expand_kernel[grid](
         inputs,

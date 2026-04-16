@@ -1,6 +1,7 @@
 import pytest
 
 torch = pytest.importorskip("torch")
+from nanovllm_voxcpm.utils.context import LoRAContext
 
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -12,7 +13,7 @@ class _FakePunicaBackend:
 
         return LoRAAvailability(available=True, reason=None)
 
-    def shrink(self, x, lora_a, *, scratch_buffer=None):
+    def shrink(self, x, lora_a):
         return torch.nn.functional.linear(x, lora_a)
 
     def expand(self, hidden, lora_b, *, scaling):
@@ -134,24 +135,26 @@ def test_lora_linear_cuda_modes_and_rank_alpha():
     y_no_lora = layer(x).cpu()
 
     set_lora_context(
-        token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([3], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(3, 4, device="cuda"),
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([3], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+        )
     )
     y_single = layer(x).cpu()
 
     set_lora_context(
-        token_to_slot=torch.tensor([0, -1, 1], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0, 2, 1], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(3, 4, device="cuda"),
+        LoRAContext(
+            token_to_slot=torch.tensor([0, -1, 1], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 2, 1], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+        )
     )
     y_mixed = layer(x).cpu()
 
@@ -179,15 +182,15 @@ def test_lora_linear_rejects_mismatched_token_to_slot_length_before_kernel_launc
         )
 
     set_lora_context(
-        token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([3], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(3, 1, device="cuda"),
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([3], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
     )
 
     x = torch.tensor([[2.0, 3.0]], device="cuda")
@@ -225,7 +228,6 @@ def test_lora_linear_cuda_graph_replay():
     active_slot_ids = torch.zeros(2, dtype=torch.int32, device="cuda")
     num_tokens_per_slot = torch.zeros(2, dtype=torch.int32, device="cuda")
     slot_start_offsets = torch.zeros(3, dtype=torch.int32, device="cuda")
-    scratch_buffer = torch.zeros(2, 1, device="cuda")
     out_buffer = torch.zeros(2, 1, device="cuda")
 
     token_to_slot.copy_(torch.tensor([0, 1], dtype=torch.int32, device="cuda"))
@@ -233,15 +235,15 @@ def test_lora_linear_cuda_graph_replay():
     num_tokens_per_slot[:2].copy_(torch.tensor([1, 1], dtype=torch.int32, device="cuda"))
     slot_start_offsets.copy_(torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"))
     set_lora_context(
-        token_to_slot=token_to_slot,
-        token_indices_sorted_by_slot=sorted_indices,
-        active_slot_ids=active_slot_ids[:2],
-        num_tokens_per_slot=num_tokens_per_slot[:2],
-        slot_start_offsets=slot_start_offsets,
-        no_lora_flag=False,
-        scratch_buffer=scratch_buffer,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([2], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=token_to_slot,
+            token_indices_sorted_by_slot=sorted_indices,
+            active_slot_ids=active_slot_ids[:2],
+            num_tokens_per_slot=num_tokens_per_slot[:2],
+            slot_start_offsets=slot_start_offsets,
+            no_lora_flag=False,
+            num_active_loras=2,
+        )
     )
 
     graph = torch.cuda.CUDAGraph()
@@ -257,7 +259,7 @@ def test_lora_linear_cuda_graph_replay():
     set_backend_for_testing(_FakePunicaBackend())
 
 
-def test_lora_capture_cudagraph_keeps_host_flags_on_cpu():
+def test_lora_capture_cudagraph_keeps_python_host_flags():
     from types import SimpleNamespace
 
     from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
@@ -284,8 +286,9 @@ def test_lora_capture_cudagraph_keeps_host_flags_on_cpu():
         torch.set_default_device(default_device)
         set_backend_for_testing(_FakePunicaBackend())
 
-    assert runner.graph_vars["lora_domains"]["lm_domain"]["no_lora_flag_cpu"].device.type == "cpu"
-    assert runner.graph_vars["lora_domains"]["lm_domain"]["num_active_loras_cpu"].device.type == "cpu"
+    context = runner.graph_vars["lora_domains"]["lm_domain"]
+    assert "no_lora_flag_cpu" not in context
+    assert "num_active_loras_cpu" not in context
     assert 1 in runner.graphs["lora"]
 
 
@@ -308,7 +311,7 @@ def test_lora_decode_smoke_cuda_graph_capture_and_two_decode_steps():
                 scaling=module_payload.scaling,
             )
 
-        set_lora_context()
+        set_lora_context(LoRAContext())
         base_step1 = model(
             torch.tensor([0], dtype=torch.int64, device="cuda"),
             torch.tensor([3], dtype=torch.int64, device="cuda"),
@@ -319,15 +322,15 @@ def test_lora_decode_smoke_cuda_graph_capture_and_two_decode_steps():
         ).cpu()
 
         set_lora_context(
-            token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
-            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
-            no_lora_flag=False,
-            scratch_buffer=torch.zeros(1, 2, dtype=torch.float32, device="cuda"),
-            no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-            num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+            LoRAContext(
+                token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+                token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+                active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+                num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+                slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+                no_lora_flag=False,
+                num_active_loras=1,
+            )
         )
 
         eager_step1 = model(
@@ -392,15 +395,15 @@ def test_lora_linear_triton_lora_b_pointer_cache_stays_bounded():
 
     x = torch.tensor([[4.0, 8.0]], device="cuda", dtype=torch.float16)
     set_lora_context(
-        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(1, 1, device="cuda", dtype=torch.float16),
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
     )
 
     for _ in range(10):
@@ -439,13 +442,14 @@ def test_lora_merged_column_set_slot_applies_scaling_once():
 
     x = torch.tensor([[4.0, 8.0]], device="cuda", dtype=torch.float16)
     set_lora_context(
-        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(1, 1, device="cuda", dtype=torch.float16),
+        LoRAContext(
+            token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+        )
     )
 
     out = layer(x).cpu()
@@ -468,15 +472,15 @@ def test_lora_qkv_cuda_graph_replay_after_runtime_slot_update():
     x_buffer = torch.zeros(1, 2, device="cuda")
     out_buffer = torch.zeros(1, 3, device="cuda")
     set_lora_context(
-        token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
-        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
-        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
-        no_lora_flag=False,
-        scratch_buffer=torch.zeros(1, 1, device="cuda"),
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32, device="cuda"),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32, device="cuda"),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
     )
 
     graph = torch.cuda.CUDAGraph()
@@ -568,7 +572,7 @@ def test_lora_qkv_parallel_cuda_tp2_modes(token_to_slot, x_rows, expected_rank0,
     layer1 = _make_tp2_qkv_layer(1)
     x = torch.tensor(x_rows, device="cuda")
     if token_to_slot is None:
-        set_lora_context()
+        set_lora_context(LoRAContext())
         y0 = layer0(x).cpu()
         y1 = layer1(x).cpu()
     else:
@@ -585,13 +589,14 @@ def test_lora_qkv_parallel_cuda_tp2_modes(token_to_slot, x_rows, expected_rank0,
         if slot_counts.numel() > 0:
             slot_offsets[1:] = torch.cumsum(slot_counts, dim=0)
         set_lora_context(
-            token_to_slot=token_to_slot_tensor,
-            token_indices_sorted_by_slot=torch.arange(len(token_to_slot), dtype=torch.int32, device="cuda"),
-            active_slot_ids=active_slot_ids,
-            num_tokens_per_slot=slot_counts,
-            slot_start_offsets=slot_offsets,
-            no_lora_flag=False,
-            scratch_buffer=torch.zeros(x.size(0), 1, device="cuda"),
+            LoRAContext(
+                token_to_slot=token_to_slot_tensor,
+                token_indices_sorted_by_slot=torch.arange(len(token_to_slot), dtype=torch.int32, device="cuda"),
+                active_slot_ids=active_slot_ids,
+                num_tokens_per_slot=slot_counts,
+                slot_start_offsets=slot_offsets,
+                no_lora_flag=False,
+            )
         )
         y0 = layer0(x).cpu()
         y1 = layer1(x).cpu()
@@ -612,18 +617,17 @@ def test_lora_qkv_parallel_cuda_tp2_graph_replay():
     active_slot_ids = torch.tensor([0, 1], dtype=torch.int32, device="cuda")
     num_tokens_per_slot = torch.tensor([1, 1], dtype=torch.int32, device="cuda")
     slot_start_offsets = torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda")
-    scratch_buffer = torch.zeros(2, 1, device="cuda")
     out_buffer = torch.zeros(2, 3, device="cuda")
     set_lora_context(
-        token_to_slot=token_to_slot,
-        token_indices_sorted_by_slot=sorted_indices,
-        active_slot_ids=active_slot_ids,
-        num_tokens_per_slot=num_tokens_per_slot,
-        slot_start_offsets=slot_start_offsets,
-        no_lora_flag=False,
-        scratch_buffer=scratch_buffer,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([2], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=token_to_slot,
+            token_indices_sorted_by_slot=sorted_indices,
+            active_slot_ids=active_slot_ids,
+            num_tokens_per_slot=num_tokens_per_slot,
+            slot_start_offsets=slot_start_offsets,
+            no_lora_flag=False,
+            num_active_loras=2,
+        )
     )
     graph = torch.cuda.CUDAGraph()
     x_buffer.copy_(torch.tensor([[2.0, 3.0], [3.0, 4.0]], device="cuda"))
@@ -654,8 +658,7 @@ def test_vendored_triton_backend_add_lora_cuda():
         num_tokens_per_slot=torch.tensor([2], dtype=torch.int32, device="cuda"),
         slot_start_offsets=torch.tensor([0, 2], dtype=torch.int32, device="cuda"),
         no_lora_flag=False,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        num_active_loras=1,
     )
 
     out = backend.add_lora(

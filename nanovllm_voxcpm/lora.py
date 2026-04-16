@@ -23,9 +23,7 @@ class LoRAMetadata:
     num_tokens_per_slot: torch.Tensor | None
     slot_start_offsets: torch.Tensor | None
     no_lora_flag: bool
-    scratch_buffer: torch.Tensor | None = None
-    no_lora_flag_cpu: torch.Tensor | None = None
-    num_active_loras_cpu: torch.Tensor | None = None
+    num_active_loras: int = 0
 
     def as_kernel_metadata(self, token_count: int):
         return (
@@ -34,8 +32,8 @@ class LoRAMetadata:
             self.num_tokens_per_slot,
             self.slot_start_offsets,
             self.active_slot_ids,
-            self.no_lora_flag_cpu,
-            self.num_active_loras_cpu,
+            self.no_lora_flag,
+            self.num_active_loras,
         )
 
 
@@ -54,9 +52,7 @@ class LoRABackend(Protocol):
         scaling: float,
     ) -> torch.Tensor: ...
 
-    def shrink(
-        self, x: torch.Tensor, lora_a: torch.Tensor, *, scratch_buffer: torch.Tensor | None = None
-    ) -> torch.Tensor: ...
+    def shrink(self, x: torch.Tensor, lora_a: torch.Tensor) -> torch.Tensor: ...
 
     def expand(self, hidden: torch.Tensor, lora_b: torch.Tensor, *, scaling: float) -> torch.Tensor: ...
 
@@ -72,9 +68,7 @@ class _UnavailableBackend:
     def availability(self) -> LoRAAvailability:
         return LoRAAvailability(available=False, reason=self.reason)
 
-    def shrink(
-        self, x: torch.Tensor, lora_a: torch.Tensor, *, scratch_buffer: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def shrink(self, x: torch.Tensor, lora_a: torch.Tensor) -> torch.Tensor:
         raise RuntimeError(self.reason)
 
     def expand(self, hidden: torch.Tensor, lora_b: torch.Tensor, *, scaling: float) -> torch.Tensor:
@@ -139,9 +133,7 @@ class _VendoredTritonPunicaBackend:
         lora_expand(tmp, [lora_b.contiguous()], out, *meta, offset_start=0, add_inputs=True)
         return out
 
-    def shrink(
-        self, x: torch.Tensor, lora_a: torch.Tensor, *, scratch_buffer: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def shrink(self, x: torch.Tensor, lora_a: torch.Tensor) -> torch.Tensor:
         lora_shrink, _ = self._ops()
         rank = lora_a.size(-2)
         tmp = torch.empty((1, x.size(0), rank), dtype=x.dtype, device=x.device)

@@ -75,7 +75,6 @@ Concrete example: VoxCPM
 import os
 import pickle
 import tempfile
-from dataclasses import asdict
 import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
@@ -236,8 +235,6 @@ class BaseModelRunner:
         token_to_slot_tensor = torch.tensor(token_to_slot, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return build_lora_context_from_token_to_slot(
             token_to_slot_tensor,
-            max_lora_rank=self.max_lora_rank,
-            dtype=self.dtype,
         )
 
     def _dit_lora_rows_per_sample(self) -> int:
@@ -541,7 +538,7 @@ class BaseModelRunner:
         )
         token_counts = [seq.seq_length - seq.num_cached_tokens for seq in seqs]
         for domain, lora_context in self._build_lora_contexts(seqs, token_counts).items():
-            set_lora_context(domain=domain, **asdict(lora_context))
+            set_lora_context(lora_context, domain=domain)
         return positions
 
     def prepare_decode_context(self, seqs: list[RunnerTask]):
@@ -563,7 +560,7 @@ class BaseModelRunner:
             block_tables=block_tables,
         )
         for domain, lora_context in self._build_lora_contexts(seqs, [1 for _ in seqs]).items():
-            set_lora_context(domain=domain, **asdict(lora_context))
+            set_lora_context(lora_context, domain=domain)
         return positions
 
     def _make_graph_domain_buffers(self, max_rows: int) -> dict[str, torch.Tensor]:
@@ -573,9 +570,6 @@ class BaseModelRunner:
             "active_slot_ids": torch.zeros(max_rows, dtype=torch.int32),
             "num_tokens_per_slot": torch.zeros(max_rows, dtype=torch.int32),
             "slot_start_offsets": torch.zeros(max_rows + 1, dtype=torch.int32),
-            "scratch": torch.zeros(max_rows, self.max_lora_rank, dtype=self.dtype),
-            "no_lora_flag_cpu": torch.tensor([True], dtype=torch.bool, device="cpu"),
-            "num_active_loras_cpu": torch.tensor([0], dtype=torch.int32, device="cpu"),
         }
 
     def _copy_lora_domain_to_graph_vars(
@@ -615,9 +609,6 @@ class BaseModelRunner:
             domain_vars["slot_start_offsets"][: context.slot_start_offsets.size(0)] = context.slot_start_offsets.to(
                 domain_vars["slot_start_offsets"].device
             )
-        domain_vars["no_lora_flag_cpu"].fill_(context.no_lora_flag)
-        num_active_slots = 0 if context.active_slot_ids is None else context.active_slot_ids.size(0)
-        domain_vars["num_active_loras_cpu"].fill_(num_active_slots)
 
     def _set_graph_lora_contexts(self, graph_vars: dict, contexts: dict[str, LoRAContext]) -> None:
         for domain in LORA_DOMAINS:
@@ -628,16 +619,16 @@ class BaseModelRunner:
             num_slot_offsets = 1 if context.slot_start_offsets is None else context.slot_start_offsets.size(0)
             token_count = 0 if context.token_to_slot is None else context.token_to_slot.size(0)
             set_lora_context(
+                LoRAContext(
+                    token_to_slot=domain_vars["token_to_slot"][:token_count],
+                    token_indices_sorted_by_slot=domain_vars["token_indices_sorted_by_slot"][:token_count],
+                    active_slot_ids=domain_vars["active_slot_ids"][:num_active_slots],
+                    num_tokens_per_slot=domain_vars["num_tokens_per_slot"][:num_active_slots],
+                    slot_start_offsets=domain_vars["slot_start_offsets"][:num_slot_offsets],
+                    no_lora_flag=context.no_lora_flag,
+                    num_active_loras=num_active_slots,
+                ),
                 domain=domain,
-                token_to_slot=domain_vars["token_to_slot"][:token_count],
-                token_indices_sorted_by_slot=domain_vars["token_indices_sorted_by_slot"][:token_count],
-                active_slot_ids=domain_vars["active_slot_ids"][:num_active_slots],
-                num_tokens_per_slot=domain_vars["num_tokens_per_slot"][:num_active_slots],
-                slot_start_offsets=domain_vars["slot_start_offsets"][:num_slot_offsets],
-                no_lora_flag=context.no_lora_flag,
-                scratch_buffer=domain_vars["scratch"][:token_count],
-                no_lora_flag_cpu=domain_vars["no_lora_flag_cpu"],
-                num_active_loras_cpu=domain_vars["num_active_loras_cpu"],
             )
 
     @torch.inference_mode()

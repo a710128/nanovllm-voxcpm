@@ -157,9 +157,7 @@ class _LoRALayerBase(nn.Module):
             num_tokens_per_slot=context.num_tokens_per_slot,
             slot_start_offsets=context.slot_start_offsets,
             no_lora_flag=context.no_lora_flag,
-            scratch_buffer=context.scratch_buffer,
-            no_lora_flag_cpu=context.no_lora_flag_cpu,
-            num_active_loras_cpu=context.num_active_loras_cpu,
+            num_active_loras=context.num_active_loras,
         )
 
     @property

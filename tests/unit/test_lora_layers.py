@@ -9,7 +9,7 @@ class _FakePunicaBackend:
 
         return LoRAAvailability(available=True, reason=None)
 
-    def shrink(self, x, lora_a, *, scratch_buffer=None):
+    def shrink(self, x, lora_a):
         return torch.nn.functional.linear(x, lora_a)
 
     def expand(self, hidden, lora_b, *, scaling):
@@ -41,7 +41,7 @@ def _install_fake_punica_backend():
 
 def test_lora_linear_context_controls_activation_and_reset():
     from nanovllm_voxcpm.layers.lora import LoRALinear
-    from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
+    from nanovllm_voxcpm.utils.context import LoRAContext, reset_lora_context, set_lora_context
 
     layer = LoRALinear(in_features=4, out_features=3, bias=False, max_lora_rank=2)
     # Deterministic weights.
@@ -52,14 +52,15 @@ def test_lora_linear_context_controls_activation_and_reset():
 
     x = torch.ones(2, 4)
     set_lora_context(
-        token_to_slot=torch.zeros(2, dtype=torch.int32),
-        token_indices_sorted_by_slot=torch.arange(2, dtype=torch.int32),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32),
-        num_tokens_per_slot=torch.tensor([2], dtype=torch.int32),
-        slot_start_offsets=torch.tensor([0, 2], dtype=torch.int32),
-        no_lora_flag=False,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=torch.zeros(2, dtype=torch.int32),
+            token_indices_sorted_by_slot=torch.arange(2, dtype=torch.int32),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32),
+            num_tokens_per_slot=torch.tensor([2], dtype=torch.int32),
+            slot_start_offsets=torch.tensor([0, 2], dtype=torch.int32),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
     )
     y_enabled = layer(x)
     assert layer.lora_enabled is True
@@ -75,14 +76,15 @@ def test_lora_linear_context_controls_activation_and_reset():
     reset_lora_context()
 
     set_lora_context(
-        token_to_slot=torch.zeros(2, dtype=torch.int32),
-        token_indices_sorted_by_slot=torch.arange(2, dtype=torch.int32),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32),
-        num_tokens_per_slot=torch.tensor([2], dtype=torch.int32),
-        slot_start_offsets=torch.tensor([0, 2], dtype=torch.int32),
-        no_lora_flag=False,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
-        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+        LoRAContext(
+            token_to_slot=torch.zeros(2, dtype=torch.int32),
+            token_indices_sorted_by_slot=torch.arange(2, dtype=torch.int32),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32),
+            num_tokens_per_slot=torch.tensor([2], dtype=torch.int32),
+            slot_start_offsets=torch.tensor([0, 2], dtype=torch.int32),
+            no_lora_flag=False,
+            num_active_loras=1,
+        )
     )
     layer.reset_lora_parameters()
     y_after_reset = layer(x)
@@ -108,7 +110,7 @@ def test_iter_lora_modules():
 
 def test_lora_linear_mixed_slots_with_runtime_context():
     from nanovllm_voxcpm.layers.lora import LoRALinear
-    from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
+    from nanovllm_voxcpm.utils.context import LoRAContext, reset_lora_context, set_lora_context
 
     layer = LoRALinear(in_features=3, out_features=2, bias=False, max_loras=2, max_lora_rank=3)
     with torch.no_grad():
@@ -136,12 +138,14 @@ def test_lora_linear_mixed_slots_with_runtime_context():
         ]
     )
     set_lora_context(
-        token_to_slot=torch.tensor([0, -1, 1], dtype=torch.int32),
-        token_indices_sorted_by_slot=torch.tensor([0, 2, 1], dtype=torch.int32),
-        active_slot_ids=torch.tensor([0, 1], dtype=torch.int32),
-        num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32),
-        slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32),
-        no_lora_flag=False,
+        LoRAContext(
+            token_to_slot=torch.tensor([0, -1, 1], dtype=torch.int32),
+            token_indices_sorted_by_slot=torch.tensor([0, 2, 1], dtype=torch.int32),
+            active_slot_ids=torch.tensor([0, 1], dtype=torch.int32),
+            num_tokens_per_slot=torch.tensor([1, 1], dtype=torch.int32),
+            slot_start_offsets=torch.tensor([0, 1, 2], dtype=torch.int32),
+            no_lora_flag=False,
+        )
     )
 
     y = layer(x)
@@ -154,7 +158,7 @@ def test_lora_linear_mixed_slots_with_runtime_context():
 
 def test_lora_linear_uses_domain_specific_runtime_context():
     from nanovllm_voxcpm.layers.lora import LoRALinear
-    from nanovllm_voxcpm.utils.context import PROJ_LORA_DOMAIN, reset_lora_context, set_lora_context
+    from nanovllm_voxcpm.utils.context import PROJ_LORA_DOMAIN, LoRAContext, reset_lora_context, set_lora_context
 
     layer = LoRALinear(
         in_features=2,
@@ -175,20 +179,24 @@ def test_lora_linear_uses_domain_specific_runtime_context():
         )
 
     set_lora_context(
-        token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32),
-        token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32),
-        active_slot_ids=torch.tensor([0], dtype=torch.int32),
-        num_tokens_per_slot=torch.tensor([3], dtype=torch.int32),
-        slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32),
-        no_lora_flag=False,
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32),
+            token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32),
+            active_slot_ids=torch.tensor([0], dtype=torch.int32),
+            num_tokens_per_slot=torch.tensor([3], dtype=torch.int32),
+            slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32),
+            no_lora_flag=False,
+        )
     )
     set_lora_context(
-        token_to_slot=torch.tensor([1], dtype=torch.int32),
-        token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32),
-        active_slot_ids=torch.tensor([1], dtype=torch.int32),
-        num_tokens_per_slot=torch.tensor([1], dtype=torch.int32),
-        slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32),
-        no_lora_flag=False,
+        LoRAContext(
+            token_to_slot=torch.tensor([1], dtype=torch.int32),
+            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32),
+            active_slot_ids=torch.tensor([1], dtype=torch.int32),
+            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32),
+            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32),
+            no_lora_flag=False,
+        ),
         domain=PROJ_LORA_DOMAIN,
     )
 
@@ -227,8 +235,8 @@ def test_vendored_metadata_skips_no_lora_tokens():
         num_active,
     ) = backend._make_metadata(3, torch.device("cpu"), torch.tensor([0, -1, 1], dtype=torch.int32))
 
-    assert no_lora_flag.item() is False
-    assert num_active.item() == 3
+    assert no_lora_flag is False
+    assert num_active == 3
     assert torch.equal(token_indices_sorted, torch.tensor([1, 0, 2], dtype=torch.int32))
     assert torch.equal(num_tokens_per_lora[:3], torch.tensor([1, 1, 1], dtype=torch.int32))
     assert torch.equal(lora_token_start_loc[:4], torch.tensor([0, 1, 2, 3], dtype=torch.int32))
@@ -237,7 +245,7 @@ def test_vendored_metadata_skips_no_lora_tokens():
 
 def test_no_lora_context_disables_all_slots():
     from nanovllm_voxcpm.layers.lora import LoRALinear
-    from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
+    from nanovllm_voxcpm.utils.context import LoRAContext, reset_lora_context, set_lora_context
 
     layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=2, max_lora_rank=1)
     with torch.no_grad():
@@ -258,9 +266,11 @@ def test_no_lora_context_disables_all_slots():
         )
 
     set_lora_context(
-        token_to_slot=torch.tensor([0, 1], dtype=torch.int32),
-        active_slot_ids=torch.tensor([0, 1], dtype=torch.int32),
-        no_lora_flag=False,
+        LoRAContext(
+            token_to_slot=torch.tensor([0, 1], dtype=torch.int32),
+            active_slot_ids=torch.tensor([0, 1], dtype=torch.int32),
+            no_lora_flag=False,
+        )
     )
     y_enabled = layer(torch.tensor([[5.0, 7.0], [11.0, 13.0]])).flatten()
 

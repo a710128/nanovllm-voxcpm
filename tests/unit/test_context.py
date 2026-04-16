@@ -27,6 +27,7 @@ def test_context_set_get_reset():
 def test_lora_context_set_get_reset():
     from nanovllm_voxcpm.utils.context import (
         PROJ_LORA_DOMAIN,
+        LoRAContext,
         get_lora_context,
         reset_lora_context,
         set_lora_context,
@@ -40,9 +41,11 @@ def test_lora_context_set_get_reset():
     token_to_slot = torch.tensor([0, -1, 1], dtype=torch.int32)
     active_slot_ids = torch.tensor([0, 1], dtype=torch.int32)
     set_lora_context(
-        token_to_slot=token_to_slot,
-        active_slot_ids=active_slot_ids,
-        no_lora_flag=False,
+        LoRAContext(
+            token_to_slot=token_to_slot,
+            active_slot_ids=active_slot_ids,
+            no_lora_flag=False,
+        )
     )
     ctx = get_lora_context()
     assert ctx.no_lora_flag is False
@@ -50,7 +53,7 @@ def test_lora_context_set_get_reset():
     assert ctx.active_slot_ids is active_slot_ids
 
     proj_token_to_slot = torch.tensor([1], dtype=torch.int32)
-    set_lora_context(token_to_slot=proj_token_to_slot, no_lora_flag=False, domain=PROJ_LORA_DOMAIN)
+    set_lora_context(LoRAContext(token_to_slot=proj_token_to_slot, no_lora_flag=False), domain=PROJ_LORA_DOMAIN)
     proj_ctx = get_lora_context(PROJ_LORA_DOMAIN)
     assert proj_ctx.token_to_slot is proj_token_to_slot
     assert get_lora_context().token_to_slot is token_to_slot

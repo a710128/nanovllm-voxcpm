@@ -106,11 +106,11 @@ def lora_shrink(
     num_tokens_per_lora: torch.Tensor,
     lora_token_start_loc: torch.Tensor,
     lora_ids: torch.Tensor,
-    no_lora_flag_cpu: torch.Tensor,
-    num_active_loras: torch.Tensor,
+    no_lora_flag: bool,
+    num_active_loras: int,
     scaling: float,
 ) -> None:
-    if no_lora_flag_cpu.item():
+    if no_lora_flag:
         return
     lora_ptr_tensor, lora_strides_d0, lora_strides_d1, lora_strides_d2 = _get_lora_a_ptr(lora_a_weights, inputs.device)
     M = inputs.size(0)
@@ -127,7 +127,7 @@ def lora_shrink(
     split_k = kernel_config["split_k"]
     group_size_m = kernel_config["group_size_m"]
     even_k = K % (block_k * split_k) == 0
-    grid = (split_k * triton.cdiv(M, block_m) * triton.cdiv(N, block_n), num_slices, num_active_loras.item())
+    grid = (split_k * triton.cdiv(M, block_m) * triton.cdiv(N, block_n), num_slices, num_active_loras)
     use_gdc = supports_pdl(inputs.device)
     _lora_shrink_kernel[grid](
         inputs,

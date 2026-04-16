@@ -7,7 +7,7 @@ class _AvailableBackend:
 
         return LoRAAvailability(available=True, reason=None)
 
-    def shrink(self, x, lora_a, *, scratch_buffer=None):
+    def shrink(self, x, lora_a):
         return torch.nn.functional.linear(x, lora_a)
 
     def expand(self, hidden, lora_b, *, scaling):
@@ -130,7 +130,7 @@ def test_lora_runtime_slot_reuse_clears_modules_absent_from_new_adapter():
     from nanovllm_voxcpm.engine.lora_manager import LoRARuntime
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.lora import set_backend_for_testing
-    from nanovllm_voxcpm.utils.context import reset_lora_context, set_lora_context
+    from nanovllm_voxcpm.utils.context import LoRAContext, reset_lora_context, set_lora_context
 
     set_backend_for_testing(_AvailableBackend())
     reset_lora_context()
@@ -181,13 +181,14 @@ def test_lora_runtime_slot_reuse_clears_modules_absent_from_new_adapter():
         runtime.build_batch_plan([adapter_b], [1], load_lora)
 
         set_lora_context(
-            token_to_slot=torch.tensor([0], dtype=torch.int32),
-            token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32),
-            active_slot_ids=torch.tensor([0], dtype=torch.int32),
-            num_tokens_per_slot=torch.tensor([1], dtype=torch.int32),
-            slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32),
-            no_lora_flag=False,
-            scratch_buffer=torch.zeros(1, 1, dtype=torch.float32),
+            LoRAContext(
+                token_to_slot=torch.tensor([0], dtype=torch.int32),
+                token_indices_sorted_by_slot=torch.tensor([0], dtype=torch.int32),
+                active_slot_ids=torch.tensor([0], dtype=torch.int32),
+                num_tokens_per_slot=torch.tensor([1], dtype=torch.int32),
+                slot_start_offsets=torch.tensor([0, 1], dtype=torch.int32),
+                no_lora_flag=False,
+            )
         )
 
         x = torch.tensor([[2.0, 3.0]], dtype=torch.float32)

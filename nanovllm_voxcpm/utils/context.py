@@ -27,9 +27,7 @@ class LoRAContext:
     num_tokens_per_slot: torch.Tensor | None = None
     slot_start_offsets: torch.Tensor | None = None
     no_lora_flag: bool = True
-    scratch_buffer: torch.Tensor | None = None
-    no_lora_flag_cpu: torch.Tensor | None = None
-    num_active_loras_cpu: torch.Tensor | None = None
+    num_active_loras: int = 0
 
 
 @dataclass
@@ -74,16 +72,12 @@ def get_lora_context(domain: str = LM_LORA_DOMAIN):
 
 def build_lora_context_from_token_to_slot(
     token_to_slot: torch.Tensor | None,
-    *,
-    max_lora_rank: int = 0,
-    dtype: torch.dtype | None = None,
 ) -> LoRAContext:
     if token_to_slot is None or token_to_slot.numel() == 0:
         return LoRAContext(
             token_to_slot=token_to_slot,
             no_lora_flag=True,
-            no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool, device="cpu"),
-            num_active_loras_cpu=torch.tensor([0], dtype=torch.int32, device="cpu"),
+            num_active_loras=0,
         )
 
     token_to_slot = token_to_slot.to(dtype=torch.int32)
@@ -93,11 +87,7 @@ def build_lora_context_from_token_to_slot(
         return LoRAContext(
             token_to_slot=token_to_slot,
             no_lora_flag=True,
-            scratch_buffer=torch.zeros(token_to_slot.numel(), max_lora_rank, dtype=dtype, device=token_to_slot.device)
-            if dtype is not None
-            else None,
-            no_lora_flag_cpu=torch.tensor([True], dtype=torch.bool, device="cpu"),
-            num_active_loras_cpu=torch.tensor([0], dtype=torch.int32, device="cpu"),
+            num_active_loras=0,
         )
 
     token_indices_by_slot = []
@@ -111,11 +101,6 @@ def build_lora_context_from_token_to_slot(
     slot_start_offsets = torch.zeros(active_slot_ids.numel() + 1, dtype=torch.int32, device=token_to_slot.device)
     slot_start_offsets[1:] = torch.cumsum(num_tokens_per_slot, dim=0)
     token_indices_sorted_by_slot = torch.cat(token_indices_by_slot).to(device=token_to_slot.device, dtype=torch.int32)
-    scratch_buffer = (
-        torch.zeros(token_to_slot.numel(), max_lora_rank, dtype=dtype, device=token_to_slot.device)
-        if dtype is not None
-        else None
-    )
     return LoRAContext(
         token_to_slot=token_to_slot,
         token_indices_sorted_by_slot=token_indices_sorted_by_slot,
@@ -123,9 +108,7 @@ def build_lora_context_from_token_to_slot(
         num_tokens_per_slot=num_tokens_per_slot,
         slot_start_offsets=slot_start_offsets,
         no_lora_flag=False,
-        scratch_buffer=scratch_buffer,
-        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool, device="cpu"),
-        num_active_loras_cpu=torch.tensor([active_slot_ids.numel()], dtype=torch.int32, device="cpu"),
+        num_active_loras=active_slot_ids.numel(),
     )
 
 
@@ -133,42 +116,16 @@ def set_lora_context_from_token_to_slot(
     token_to_slot: torch.Tensor | None,
     *,
     domain: str = LM_LORA_DOMAIN,
-    max_lora_rank: int = 0,
-    dtype: torch.dtype | None = None,
 ) -> None:
-    set_lora_context(
-        domain=domain,
-        **build_lora_context_from_token_to_slot(
-            token_to_slot,
-            max_lora_rank=max_lora_rank,
-            dtype=dtype,
-        ).__dict__,
-    )
+    set_lora_context(build_lora_context_from_token_to_slot(token_to_slot), domain=domain)
 
 
 def set_lora_context(
-    token_to_slot=None,
-    token_indices_sorted_by_slot=None,
-    active_slot_ids=None,
-    num_tokens_per_slot=None,
-    slot_start_offsets=None,
-    no_lora_flag=True,
-    scratch_buffer=None,
-    no_lora_flag_cpu=None,
-    num_active_loras_cpu=None,
+    lora_context: LoRAContext,
+    *,
     domain: str = LM_LORA_DOMAIN,
 ):
-    _LORA_CONTEXTS.domains[domain] = LoRAContext(
-        token_to_slot=token_to_slot,
-        token_indices_sorted_by_slot=token_indices_sorted_by_slot,
-        active_slot_ids=active_slot_ids,
-        num_tokens_per_slot=num_tokens_per_slot,
-        slot_start_offsets=slot_start_offsets,
-        no_lora_flag=no_lora_flag,
-        scratch_buffer=scratch_buffer,
-        no_lora_flag_cpu=no_lora_flag_cpu,
-        num_active_loras_cpu=num_active_loras_cpu,
-    )
+    _LORA_CONTEXTS.domains[domain] = lora_context
 
 
 def reset_context():
