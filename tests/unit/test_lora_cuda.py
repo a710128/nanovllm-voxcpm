@@ -19,19 +19,20 @@ class _FakePunicaBackend:
     def expand(self, hidden, lora_b, *, scaling):
         return torch.nn.functional.linear(hidden, lora_b) * scaling
 
-    def add_lora(self, y, x, lora_a, lora_b, *, indices, metadata, scaling):
-        out = y.clone()
+    def add_lora(self, y_slices, x, lora_a_slices, lora_b_slices, *, indices, metadata, scaling):
+        out_slices = [y.clone() for y in y_slices]
         for token_idx in range(x.size(0)):
             slot_id = int(indices[token_idx].item())
             if slot_id < 0:
                 continue
-            hidden = self.shrink(x[token_idx : token_idx + 1], lora_a[slot_id])
-            out[token_idx : token_idx + 1] = out[token_idx : token_idx + 1] + self.expand(
-                hidden,
-                lora_b[slot_id],
-                scaling=scaling,
-            )
-        return out
+            for slice_idx, out in enumerate(out_slices):
+                hidden = self.shrink(x[token_idx : token_idx + 1], lora_a_slices[slice_idx][slot_id])
+                out[token_idx : token_idx + 1] = out[token_idx : token_idx + 1] + self.expand(
+                    hidden,
+                    lora_b_slices[slice_idx][slot_id],
+                    scaling=scaling,
+                )
+        return out_slices
 
 
 @pytest.fixture(autouse=True)
@@ -765,14 +766,14 @@ def test_vendored_triton_backend_add_lora_cuda():
     )
 
     out = backend.add_lora(
-        y,
+        [y],
         x,
-        lora_a,
-        lora_b,
+        [lora_a],
+        [lora_b],
         indices=torch.zeros(2, dtype=torch.long, device="cuda"),
         metadata=metadata,
         scaling=0.5,
-    )
+    )[0]
 
     assert torch.allclose(out.cpu().flatten(), torch.tensor([4.0, 10.0], dtype=torch.float16))
 

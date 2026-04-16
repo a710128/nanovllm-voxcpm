@@ -11,8 +11,7 @@ MODEL_NAME = "openbmb/VoxCPM2"
 LORA_NAME = "demo"
 LORA_PATH = "/path/to/lora/checkpoint"  # directory containing lora_weights.safetensors (+ optional lora_config.json)
 OUTPUT_WAV = "test_lora_async.wav"
-ALL_LINEAR_LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-VOXCPM2_PROJ_LORA_TARGETS = ["enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj", "fusion_concat_proj"]
+ATTENTION_LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 
 async def main():
@@ -28,12 +27,12 @@ async def main():
         lora_config=LoRAConfig(
             enable_lm=True,
             enable_dit=True,
-            enable_proj=True,
+            enable_proj=False,
             max_loras=1,
-            max_lora_rank=32,
-            target_modules_lm=ALL_LINEAR_LORA_TARGETS,
-            target_modules_dit=ALL_LINEAR_LORA_TARGETS,
-            target_proj_modules=VOXCPM2_PROJ_LORA_TARGETS,
+            max_lora_rank=8,
+            target_modules_lm=ATTENTION_LORA_TARGETS,
+            target_modules_dit=ATTENTION_LORA_TARGETS,
+            target_proj_modules=[],
         ),
     )
     await server.wait_for_ready()

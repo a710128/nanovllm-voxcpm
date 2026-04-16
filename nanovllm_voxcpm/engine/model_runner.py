@@ -88,6 +88,7 @@ from nanovllm_voxcpm.engine.lora_manager import (
     build_lora_context_from_slot_list,
 )
 from nanovllm_voxcpm.layers.attention import Attention
+from nanovllm_voxcpm.layers.lora import iter_lora_modules
 from nanovllm_voxcpm.lora import is_available as is_lora_available
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
@@ -652,6 +653,11 @@ class BaseModelRunner:
         self.graphs = {"base": {}, "lora": {}}
         self.graph_pool = None
         capture_lora_graphs = bool(config.lora_config is not None and is_lora_available())
+        if capture_lora_graphs:
+            for module in iter_lora_modules(self.model):
+                prime_lora_cache = getattr(module, "prime_lora_cache", None)
+                if prime_lora_cache is not None:
+                    prime_lora_cache()
 
         for bs in reversed(self.graph_bs):
             base_graph = torch.cuda.CUDAGraph()

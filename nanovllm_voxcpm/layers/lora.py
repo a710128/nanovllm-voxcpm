@@ -243,7 +243,7 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         self.lora_targets = resolved_lora_targets
         self.target_to_index = {target: idx for idx, target in enumerate(self.lora_targets)}
         if self.supports_lora:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), self.max_lora_rank, hidden_size))
+            self.lora_A = nn.Parameter(torch.zeros(len(self.lora_targets), max_loras, self.max_lora_rank, hidden_size))
             if "q" in self.lora_targets:
                 self.lora_B_q = nn.Parameter(torch.zeros(max_loras, self.q_size, self.max_lora_rank))
                 set_weight_loader(self.lora_B_q, self._make_lora_b_weight_loader("q"))
@@ -289,32 +289,10 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
             return
         self._validate_effective_rank(loaded_weight.size(0))
         target_idx = self.target_to_index[target]
-        self.lora_A.data[0, target_idx].zero_()
-        self.lora_A.data[0, target_idx, : loaded_weight.size(0)].copy_(loaded_weight)
+        self.lora_A.data[target_idx, 0].zero_()
+        self.lora_A.data[target_idx, 0, : loaded_weight.size(0)].copy_(loaded_weight)
         self.effective_lora_rank[0] = loaded_weight.size(0)
         self._effective_lora_rank_values[0] = loaded_weight.size(0)
-
-    def _apply_target(
-        self, x_flat: torch.Tensor, output: torch.Tensor, token_to_slot: torch.Tensor, target: str
-    ) -> torch.Tensor:
-        backend = get_backend()
-        metadata = self._runtime_metadata()
-        target_idx = self.target_to_index[target]
-        if target == "q":
-            lora_b = self.lora_B_q
-        elif target == "k":
-            lora_b = self.lora_B_k
-        else:
-            lora_b = self.lora_B_v
-        return backend.add_lora(
-            output,
-            x_flat,
-            self.lora_A[:, target_idx],
-            lora_b,
-            indices=token_to_slot,
-            metadata=metadata,
-            scaling=1.0,
-        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         qkv = F.linear(x, self.weight, self.bias)
@@ -323,15 +301,37 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
             return qkv
         x_flat, original_shape = _flatten_tokens(x)
         out_flat, _ = _flatten_tokens(qkv)
-        q, k, v = out_flat.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        if "q" in self.lora_targets:
-            q = self._apply_target(x_flat, q, token_to_slot, "q")
-        if "k" in self.lora_targets:
-            k = self._apply_target(x_flat, k, token_to_slot, "k")
-        if "v" in self.lora_targets:
-            v = self._apply_target(x_flat, v, token_to_slot, "v")
-        out_flat = torch.cat([q, k, v], dim=-1)
+        splits = list(out_flat.split([self.q_size, self.kv_size, self.kv_size], dim=-1))
+        target_to_output_index = {"q": 0, "k": 1, "v": 2}
+        backend = get_backend()
+        metadata = self._runtime_metadata()
+        output_slices = [splits[target_to_output_index[target]] for target in self.lora_targets]
+        lora_a_slices = [self.lora_A[self.target_to_index[target]] for target in self.lora_targets]
+        lora_b_slices = [getattr(self, f"lora_B_{target}") for target in self.lora_targets]
+        updated_slices = backend.add_lora(
+            output_slices,
+            x_flat,
+            lora_a_slices,
+            lora_b_slices,
+            indices=token_to_slot,
+            metadata=metadata,
+            scaling=1.0,
+        )
+        for target, updated_slice in zip(self.lora_targets, updated_slices):
+            splits[target_to_output_index[target]] = updated_slice
+        out_flat = torch.cat(splits, dim=-1)
         return _restore_tokens(out_flat, original_shape)
+
+    def prime_lora_cache(self) -> None:
+        if not self.supports_lora:
+            return
+        backend = get_backend()
+        prime = getattr(backend, "prime_slice_caches", None)
+        if prime is None:
+            return
+        lora_a_slices = [self.lora_A[self.target_to_index[target]] for target in self.lora_targets]
+        lora_b_slices = [getattr(self, f"lora_B_{target}") for target in self.lora_targets]
+        prime(lora_a_slices, lora_b_slices)
 
     def set_slot_lora(
         self,
@@ -342,9 +342,9 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         scaling: float,
     ) -> None:
         self._validate_effective_rank(effective_rank)
-        self.lora_A.data[slot_id].zero_()
+        self.lora_A.data[:, slot_id].zero_()
         for target_idx, target_a in enumerate(lora_a):
-            self.lora_A.data[slot_id, target_idx, :effective_rank].copy_(target_a[:effective_rank])
+            self.lora_A.data[target_idx, slot_id, :effective_rank].copy_(target_a[:effective_rank])
         for target, target_b in zip(self.lora_targets, lora_b):
             getattr(self, f"lora_B_{target}").data[slot_id].zero_()
             getattr(self, f"lora_B_{target}").data[slot_id, :, :effective_rank].copy_(
@@ -400,7 +400,7 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
     def clear_slot_lora(self, slot_id: int) -> None:
         if not self.supports_lora:
             return
-        self.lora_A.data[slot_id].zero_()
+        self.lora_A.data[:, slot_id].zero_()
         for target in self.lora_targets:
             getattr(self, f"lora_B_{target}").data[slot_id].zero_()
         self._clear_slot_metadata(slot_id)
@@ -445,7 +445,7 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         self.lora_targets = resolved_lora_targets
         self.target_to_index = {target: idx for idx, target in enumerate(self.lora_targets)}
         if self.supports_lora:
-            self.lora_A = nn.Parameter(torch.zeros(max_loras, len(self.lora_targets), self.max_lora_rank, input_size))
+            self.lora_A = nn.Parameter(torch.zeros(len(self.lora_targets), max_loras, self.max_lora_rank, input_size))
             for target_idx in self.lora_targets:
                 lora_b = nn.Parameter(torch.zeros(max_loras, self.shard_output_sizes[target_idx], self.max_lora_rank))
                 set_weight_loader(lora_b, self._make_lora_b_weight_loader(target_idx))
@@ -479,8 +479,8 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
             return
         self._validate_effective_rank(loaded_weight.size(0))
         fused_idx = self.target_to_index[target_idx]
-        self.lora_A.data[0, fused_idx].zero_()
-        self.lora_A.data[0, fused_idx, : loaded_weight.size(0)].copy_(loaded_weight)
+        self.lora_A.data[fused_idx, 0].zero_()
+        self.lora_A.data[fused_idx, 0, : loaded_weight.size(0)].copy_(loaded_weight)
         self.effective_lora_rank[0] = loaded_weight.size(0)
         self._effective_lora_rank_values[0] = loaded_weight.size(0)
 
@@ -494,19 +494,33 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         backend = get_backend()
         metadata = self._runtime_metadata()
         splits = list(out_flat.split(self.shard_output_sizes, dim=-1))
-        for target_idx in self.lora_targets:
-            fused_idx = self.target_to_index[target_idx]
-            splits[target_idx] = backend.add_lora(
-                splits[target_idx],
-                x_flat,
-                self.lora_A[:, fused_idx],
-                getattr(self, f"lora_B_{target_idx}"),
-                indices=token_to_slot,
-                metadata=metadata,
-                scaling=1.0,
-            )
+        output_slices = [splits[target_idx] for target_idx in self.lora_targets]
+        lora_a_slices = [self.lora_A[self.target_to_index[target_idx]] for target_idx in self.lora_targets]
+        lora_b_slices = [getattr(self, f"lora_B_{target_idx}") for target_idx in self.lora_targets]
+        updated_slices = backend.add_lora(
+            output_slices,
+            x_flat,
+            lora_a_slices,
+            lora_b_slices,
+            indices=token_to_slot,
+            metadata=metadata,
+            scaling=1.0,
+        )
+        for target_idx, updated_slice in zip(self.lora_targets, updated_slices):
+            splits[target_idx] = updated_slice
         out_flat = torch.cat(splits, dim=-1)
         return _restore_tokens(out_flat, original_shape)
+
+    def prime_lora_cache(self) -> None:
+        if not self.supports_lora:
+            return
+        backend = get_backend()
+        prime = getattr(backend, "prime_slice_caches", None)
+        if prime is None:
+            return
+        lora_a_slices = [self.lora_A[self.target_to_index[target_idx]] for target_idx in self.lora_targets]
+        lora_b_slices = [getattr(self, f"lora_B_{target_idx}") for target_idx in self.lora_targets]
+        prime(lora_a_slices, lora_b_slices)
 
     def set_slot_lora(
         self,
@@ -517,9 +531,9 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         scaling: float,
     ) -> None:
         self._validate_effective_rank(effective_rank)
-        self.lora_A.data[slot_id].zero_()
+        self.lora_A.data[:, slot_id].zero_()
         for fused_idx, target_a in enumerate(lora_a):
-            self.lora_A.data[slot_id, fused_idx, :effective_rank].copy_(target_a[:effective_rank])
+            self.lora_A.data[fused_idx, slot_id, :effective_rank].copy_(target_a[:effective_rank])
         for target_idx, target_b in zip(self.lora_targets, lora_b):
             getattr(self, f"lora_B_{target_idx}").data[slot_id].zero_()
             getattr(self, f"lora_B_{target_idx}").data[slot_id, :, :effective_rank].copy_(
@@ -542,7 +556,7 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
     def clear_slot_lora(self, slot_id: int) -> None:
         if not self.supports_lora:
             return
-        self.lora_A.data[slot_id].zero_()
+        self.lora_A.data[:, slot_id].zero_()
         for target_idx in self.lora_targets:
             getattr(self, f"lora_B_{target_idx}").data[slot_id].zero_()
         self._clear_slot_metadata(slot_id)
@@ -640,14 +654,14 @@ class LoRARowParallelLinear(_LoRALayerBase):
             backend = get_backend()
             metadata = self._runtime_metadata()
             y_flat = backend.add_lora(
-                y_flat,
+                [y_flat],
                 x_flat,
-                self.lora_A,
-                self.lora_B,
+                [self.lora_A],
+                [self.lora_B],
                 indices=token_to_slot,
                 metadata=metadata,
                 scaling=1.0,
-            )
+            )[0]
             y = _restore_tokens(y_flat, original_shape)
         if self.tp_size > 1:
             dist.all_reduce(y)
@@ -750,14 +764,14 @@ class LoRALinear(_LoRALayerBase):
         backend = get_backend()
         metadata = self._runtime_metadata()
         y_flat = backend.add_lora(
-            y_flat,
+            [y_flat],
             x_flat,
-            self.lora_A,
-            self.lora_B,
+            [self.lora_A],
+            [self.lora_B],
             indices=token_to_slot,
             metadata=metadata,
             scaling=1.0,
-        )
+        )[0]
         return _restore_tokens(y_flat, original_shape)
 
     def set_slot_lora(
