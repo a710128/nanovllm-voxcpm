@@ -163,6 +163,38 @@ def test_lora_linear_cuda_modes_and_rank_alpha():
     assert torch.allclose(y_mixed[2], torch.tensor([11.5, 23.0]))
 
 
+def test_lora_linear_rejects_mismatched_token_to_slot_length_before_kernel_launch():
+    from nanovllm_voxcpm.layers.lora import LoRALinear
+    from nanovllm_voxcpm.utils.context import set_lora_context
+
+    layer = LoRALinear(in_features=2, out_features=1, bias=False, max_loras=1, max_lora_rank=1).cuda()
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.tensor([[1.0, 0.0]], device="cuda"),
+            lora_b=torch.tensor([[2.0]], device="cuda"),
+            effective_rank=1,
+            scaling=1.0,
+        )
+
+    set_lora_context(
+        token_to_slot=torch.tensor([0, 0, 0], dtype=torch.int32, device="cuda"),
+        token_indices_sorted_by_slot=torch.tensor([0, 1, 2], dtype=torch.int32, device="cuda"),
+        active_slot_ids=torch.tensor([0], dtype=torch.int32, device="cuda"),
+        num_tokens_per_slot=torch.tensor([3], dtype=torch.int32, device="cuda"),
+        slot_start_offsets=torch.tensor([0, 3], dtype=torch.int32, device="cuda"),
+        no_lora_flag=False,
+        scratch_buffer=torch.zeros(3, 1, device="cuda"),
+        no_lora_flag_cpu=torch.tensor([False], dtype=torch.bool),
+        num_active_loras_cpu=torch.tensor([1], dtype=torch.int32),
+    )
+
+    x = torch.tensor([[2.0, 3.0]], device="cuda")
+    with pytest.raises(RuntimeError, match="token_to_slot length does not match flattened input rows"):
+        layer(x)
+
+
 def test_lora_linear_cuda_graph_replay():
     from nanovllm_voxcpm.layers.lora import LoRALinear
     from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing

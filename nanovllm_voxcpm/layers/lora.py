@@ -89,6 +89,11 @@ class _LoRALayerBase(nn.Module):
                 return None
             if token_to_slot.device != x_flat.device:
                 raise RuntimeError("LoRA token_to_slot must be prepared on the execution device by the model runner")
+            if token_to_slot.numel() != x_flat.size(0):
+                raise RuntimeError(
+                    "LoRA token_to_slot length does not match flattened input rows: "
+                    f"token_to_slot={token_to_slot.numel()} rows={x_flat.size(0)}"
+                )
             return token_to_slot.to(dtype=torch.int64)
         return None
 
