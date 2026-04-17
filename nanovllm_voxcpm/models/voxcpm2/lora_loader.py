@@ -38,8 +38,8 @@ def load_voxcpm2_lora_checkpoint(path: str, *, tp_size: int = 1) -> LoRAModelPay
     base_modules = {name: _build_module_payload(module, rank, alpha) for name, module in collected_modules.items()}
     base_payload = LoRAModelPayload(modules=base_modules, rank=rank, alpha=alpha)
     if tp_size <= 1:
-        return base_payload
-    return [_shard_payload_for_rank(base_payload, rank_idx, tp_size) for rank_idx in range(tp_size)]
+        return _pin_payload(base_payload)
+    return [_pin_payload(_shard_payload_for_rank(base_payload, rank_idx, tp_size)) for rank_idx in range(tp_size)]
 
 
 def _validate_checkpoint_dir(checkpoint_dir: Path) -> None:
@@ -95,6 +95,11 @@ def _resolve_rank(collected_modules: dict[str, _CollectedModule], checkpoint_con
 
 
 def _load_collected_modules(checkpoint_dir: Path) -> dict[str, _CollectedModule]:
+    # Adapter weights are typically HtoD-copied on the first request that
+    # needs them. We pin the CPU staging tensors up front so `.to("cuda",
+    # non_blocking=True)` at slot-load time is a real DMA transfer (pinned
+    # memory path is ~2x faster than pageable and does not block the CPU).
+    cuda_available = torch.cuda.is_available()
     collected: dict[str, _CollectedModule] = {}
     with safe_open(checkpoint_dir / _LORA_WEIGHTS_FILE, framework="pt", device="cpu") as f:
         for key in f.keys():
@@ -108,6 +113,8 @@ def _load_collected_modules(checkpoint_dir: Path) -> dict[str, _CollectedModule]
             if target not in module.targets:
                 module.targets.append(target)
             tensor = f.get_tensor(key).to(dtype=torch.float32)
+            if cuda_available:
+                tensor = tensor.pin_memory()
             if tensor_kind == "a":
                 module.lora_a_by_target[target] = tensor
             else:
@@ -192,6 +199,38 @@ def _shard_payload_for_rank(payload: LoRAModelPayload, rank: int, tp_size: int) 
     for module_name, module_payload in payload.modules.items():
         modules[module_name] = _shard_module_payload(module_name, module_payload, rank, tp_size)
     return LoRAModelPayload(modules=modules, rank=payload.rank, alpha=payload.alpha)
+
+
+def _pin_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    if not torch.cuda.is_available():
+        return tensor
+    if tensor.is_pinned():
+        return tensor
+    return tensor.pin_memory()
+
+
+def _pin_payload(payload: LoRAModelPayload) -> LoRAModelPayload:
+    """Ensure every adapter tensor sits in pinned host memory.
+
+    Upstream transformations (``torch.stack`` / ``chunk().contiguous()`` /
+    ``clone()``) can strip the pinned attribute from the staging tensors, so
+    we re-pin right before handing payloads to the runtime. Pinned memory
+    makes the eventual ``.to("cuda", non_blocking=True)`` slot-load a real
+    async DMA transfer instead of a blocking pageable copy.
+    """
+    pinned_modules: dict[str, LoRAModulePayload] = {}
+    for name, module_payload in payload.modules.items():
+        if isinstance(module_payload.lora_b, list):
+            new_b: list[torch.Tensor] | torch.Tensor = [_pin_tensor(t) for t in module_payload.lora_b]
+        else:
+            new_b = _pin_tensor(module_payload.lora_b)
+        pinned_modules[name] = LoRAModulePayload(
+            lora_a=_pin_tensor(module_payload.lora_a),
+            lora_b=new_b,
+            effective_rank=module_payload.effective_rank,
+            scaling=module_payload.scaling,
+        )
+    return LoRAModelPayload(modules=pinned_modules, rank=payload.rank, alpha=payload.alpha)
 
 
 def _shard_module_payload(module_name: str, module_payload: LoRAModulePayload, rank: int, tp_size: int):

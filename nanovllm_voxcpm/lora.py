@@ -50,6 +50,7 @@ class LoRABackend(Protocol):
         indices: torch.Tensor,
         metadata: LoRAMetadata | None,
         scaling: float,
+        y_packed: torch.Tensor | None = None,
     ) -> list[torch.Tensor]: ...
 
     def shrink(self, x: torch.Tensor, lora_a: torch.Tensor) -> torch.Tensor: ...
@@ -84,6 +85,7 @@ class _UnavailableBackend:
         indices: torch.Tensor,
         metadata: LoRAMetadata | None,
         scaling: float,
+        y_packed: torch.Tensor | None = None,
     ) -> list[torch.Tensor]:
         raise RuntimeError(self.reason)
 
@@ -141,64 +143,152 @@ class _VendoredTritonPunicaBackend:
         indices: torch.Tensor,
         metadata: LoRAMetadata | None,
         scaling: float,
+        y_packed: torch.Tensor | None = None,
     ) -> list[torch.Tensor]:
+        """Apply grouped LoRA shrink+expand and accumulate into y.
+
+        Fast path (``y_packed`` provided): ``y_slices`` must be views of
+        ``y_packed`` laid out as contiguous columns in that order (e.g. the
+        output of ``y_packed.split(sizes, dim=-1)``). Expand writes directly
+        into ``y_packed``; the returned ``y_slices`` are the same views.
+
+        Slow path (``y_packed is None``, legacy): the caller's slices are
+        treated as an independent packed buffer; we allocate a contiguous
+        staging tensor, expand into it, and return slice-views of that tensor.
+        """
         if not y_slices:
             return []
         if len(y_slices) != len(lora_a_slices) or len(y_slices) != len(lora_b_slices):
             raise ValueError("add_lora expects aligned y/lora_a/lora_b slice lists")
-
-        outputs = [y_slice.clone() for y_slice in y_slices]
-        active_indices = [slice_idx for slice_idx, y_slice in enumerate(y_slices) if y_slice.numel() > 0]
-        if not active_indices:
-            return outputs
-
-        active_y_slices = [y_slices[idx] for idx in active_indices]
-        active_lora_a_slices = [lora_a_slices[idx] for idx in active_indices]
-        active_lora_b_slices = [lora_b_slices[idx] for idx in active_indices]
-
         if metadata is None:
             raise RuntimeError("LoRA metadata must be prepared by the model runner before backend execution")
-        meta = metadata.as_kernel_metadata(x.size(0))
-        if not all(tensor.is_contiguous() for tensor in active_lora_a_slices):
+
+        if not all(tensor.is_contiguous() for tensor in lora_a_slices):
             raise ValueError("add_lora expects contiguous lora_a slices")
-        if not all(tensor.is_contiguous() for tensor in active_lora_b_slices):
+        if not all(tensor.is_contiguous() for tensor in lora_b_slices):
             raise ValueError("add_lora expects contiguous lora_b slices")
 
+        # Resolve packed output buffer.
+        if y_packed is None:
+            if len(y_slices) == 1:
+                # Single-slice layers (row-parallel, plain linear) hand us the
+                # flat output directly; write in place.
+                y_packed = y_slices[0]
+                slice_offsets: list[int] | None = None
+            else:
+                # Legacy fallback: allocate a contiguous packed buffer.
+                split_sizes = [y_slice.size(-1) for y_slice in y_slices]
+                y_packed = torch.cat(y_slices, dim=-1)
+                y_slices = list(y_packed.split(split_sizes, dim=-1))
+                slice_offsets = None  # contiguous, starts at 0
+        else:
+            if y_packed.dim() != 2:
+                raise ValueError("y_packed must be 2D [num_tokens, packed_hidden]")
+
+        meta = metadata.as_kernel_metadata(x.size(0))
         lora_shrink, lora_expand = self._ops()
-        tmp_slices: list[torch.Tensor | None] = [None for _ in active_y_slices]
+
+        # Drop slices whose output is empty (e.g. TP shards that own no output
+        # rows for a target). They contribute nothing and complicate grouping.
+        active = [i for i, y in enumerate(y_slices) if y.numel() > 0]
+        if not active:
+            return list(y_slices)
+
+        # Grouped shrink: one kernel call per (rank, in_dim) bucket.
+        # tmp_slices[i] = intermediate [num_tokens, rank] for active[i].
+        tmp_slices: list[torch.Tensor | None] = [None] * len(active)
         shrink_groups: dict[tuple[int, int], list[int]] = {}
-        for slice_idx, lora_a in enumerate(active_lora_a_slices):
-            shrink_groups.setdefault((lora_a.size(-2), lora_a.size(-1)), []).append(slice_idx)
+        for local_i, slice_idx in enumerate(active):
+            lora_a = lora_a_slices[slice_idx]
+            shrink_groups.setdefault((lora_a.size(-2), lora_a.size(-1)), []).append(local_i)
 
-        for group_indices in shrink_groups.values():
-            rank = active_lora_a_slices[group_indices[0]].size(-2)
-            tmp = torch.empty((len(group_indices), x.size(0), rank), dtype=x.dtype, device=x.device)
-            lora_shrink(x, [active_lora_a_slices[idx] for idx in group_indices], tmp, *meta, scaling)
-            for local_idx, slice_idx in enumerate(group_indices):
-                tmp_slices[slice_idx] = tmp[local_idx]
+        for group_local in shrink_groups.values():
+            rank = lora_a_slices[active[group_local[0]]].size(-2)
+            tmp = torch.empty((len(group_local), x.size(0), rank), dtype=x.dtype, device=x.device)
+            lora_shrink(x, [lora_a_slices[active[i]] for i in group_local], tmp, *meta, scaling)
+            for t_idx, local_i in enumerate(group_local):
+                tmp_slices[local_i] = tmp[t_idx]
 
+        # Grouped expand by (rank, hidden_out). _lora_expand_kernel treats
+        # ``N = max(hidden_sizes)`` as the loop bound for ALL slices, so mixing
+        # slices of different output widths is only safe when every slice has
+        # the same hidden dim — otherwise the kernel touches out-of-range
+        # columns for the narrower slices and can trip illegal memory access
+        # when writing into a tightly packed output buffer.
         expand_groups: dict[tuple[int, int], list[int]] = {}
-        for slice_idx, (y_slice, lora_b) in enumerate(zip(active_y_slices, active_lora_b_slices)):
-            expand_groups.setdefault((y_slice.size(-1), lora_b.size(-1)), []).append(slice_idx)
+        for local_i, slice_idx in enumerate(active):
+            lora_b = lora_b_slices[slice_idx]
+            expand_groups.setdefault((lora_b.size(-1), lora_b.size(1)), []).append(local_i)
 
-        for group_indices in expand_groups.values():
-            group_tmp_slices = [tmp_slices[idx] for idx in group_indices]
-            if any(tmp_slice is None for tmp_slice in group_tmp_slices):
-                raise RuntimeError("LoRA shrink did not produce all intermediate slices")
-            group_tmp = torch.stack(group_tmp_slices)
-            out = torch.cat([active_y_slices[idx].clone() for idx in group_indices], dim=-1)
+        if y_packed is not None and len(expand_groups) == 1 and len(active) == len(y_slices):
+            # Fast path: every slice active, same rank and hidden dim, slices
+            # are views of y_packed laid out contiguously — one expand call,
+            # accumulating straight into y_packed.
+            group_local = next(iter(expand_groups.values()))
+            group_tmp = (
+                torch.stack([tmp_slices[i] for i in group_local])
+                if len(group_local) > 1
+                else tmp_slices[group_local[0]].unsqueeze(0)
+            )
             lora_expand(
                 group_tmp,
-                [active_lora_b_slices[idx] for idx in group_indices],
-                out,
+                [lora_b_slices[active[i]] for i in group_local],
+                y_packed,
                 *meta,
                 offset_start=0,
                 add_inputs=True,
             )
-            split_sizes = [active_y_slices[idx].size(-1) for idx in group_indices]
-            for slice_idx, output in zip(group_indices, out.split(split_sizes, dim=-1)):
-                outputs[active_indices[slice_idx]] = output
+            return list(y_slices)
 
+        # Fallback: group by (rank, hidden_out). Within each group, if the
+        # slices are a contiguous span in y_packed we can still expand in
+        # place by supplying ``offset_start`` = the column where the group
+        # begins. This keeps the hot path zero-copy for the common QKV
+        # layout (group 1 = q at col 0; group 2 = k,v contiguous starting
+        # at col q_size).
+        outputs = list(y_slices)
+        # Precompute running column offsets of each slice in the natural
+        # packed layout (i.e. concatenation order of y_slices).
+        col_offsets = [0]
+        for y in y_slices:
+            col_offsets.append(col_offsets[-1] + y.size(-1))
+
+        for group_local in expand_groups.values():
+            group_tmp_slices = [tmp_slices[i] for i in group_local]
+            if any(t is None for t in group_tmp_slices):
+                raise RuntimeError("LoRA shrink did not produce all intermediate slices")
+            group_tmp = torch.stack(group_tmp_slices)
+            group_slice_ids = [active[i] for i in group_local]
+
+            # Contiguous-in-y_packed fast sub-path.
+            is_contiguous_span = y_packed is not None and all(
+                group_slice_ids[k] + 1 == group_slice_ids[k + 1] for k in range(len(group_slice_ids) - 1)
+            )
+            if is_contiguous_span:
+                group_offset = col_offsets[group_slice_ids[0]]
+                lora_expand(
+                    group_tmp,
+                    [lora_b_slices[idx] for idx in group_slice_ids],
+                    y_packed,
+                    *meta,
+                    offset_start=group_offset,
+                    add_inputs=True,
+                )
+                continue
+
+            # Slow sub-path: stage into a dedicated packed buffer.
+            stage = torch.cat([y_slices[idx] for idx in group_slice_ids], dim=-1)
+            lora_expand(
+                group_tmp,
+                [lora_b_slices[idx] for idx in group_slice_ids],
+                stage,
+                *meta,
+                offset_start=0,
+                add_inputs=True,
+            )
+            split_sizes = [y_slices[idx].size(-1) for idx in group_slice_ids]
+            for idx, output in zip(group_slice_ids, stage.split(split_sizes, dim=-1)):
+                outputs[idx] = output
         return outputs
 
     def shrink(self, x: torch.Tensor, lora_a: torch.Tensor) -> torch.Tensor:

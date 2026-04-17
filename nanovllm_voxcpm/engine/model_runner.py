@@ -364,6 +364,55 @@ class BaseModelRunner:
         inputs = {"positions": self.prepare_prefill_context(seqs)}
         inputs.update(self.make_dummy_inputs(num_seqs, max_model_len))
         _ = self.model(**inputs)
+
+        # If LoRA is enabled, run additional warmup prefills with a fake
+        # active slot so the Triton shrink/expand kernels JIT-compile and
+        # autotune for prefill-shaped inputs during startup. Without this,
+        # the first real request pays the JIT cost (hundreds of ms) on its
+        # critical path and TTFB regresses significantly.
+        #
+        # Slot 0 weights are zero at this point; the kernel still runs and
+        # contributes 0 to the output, which is exactly what we need for a
+        # compile-only warmup.
+        #
+        # We exercise two shapes because `get_lora_op_configs` picks a
+        # different shrink config at M<128 vs M>=128 (different split_k and
+        # block_k), which instantiates distinct Triton kernels. Warming only
+        # one regime still leaves the other to JIT on the first real request.
+        if self.max_loras > 0 and is_lora_available():
+            short_len = min(64, max_model_len)
+            shape_candidates = []
+            if max_model_len >= 128:
+                shape_candidates.append((num_seqs, max_model_len))
+            if short_len < 128:
+                shape_candidates.append((1, short_len))
+            # Deduplicate while preserving order.
+            seen = set()
+            shapes = [s for s in shape_candidates if not (s in seen or seen.add(s))]
+            for warmup_num_seqs, warmup_len in shapes:
+                warmup_seqs = [
+                    RunnerTask(
+                        block_table=[],
+                        seq_length=warmup_len,
+                        num_cached_tokens=0,
+                        block_size=self.block_size,
+                        custom_payload=None,
+                    )
+                    for _ in range(warmup_num_seqs)
+                ]
+                warmup_inputs = {"positions": self.prepare_prefill_context(warmup_seqs)}
+                warmup_inputs.update(self.make_dummy_inputs(warmup_num_seqs, warmup_len))
+                # Override LoRA contexts with "slot 0 active for every row".
+                total_rows = warmup_num_seqs * warmup_len
+                dit_rows_per_sample = self._dit_lora_rows_per_sample()
+                lm_ctx = build_lora_context_from_slot_list([0] * total_rows)
+                proj_ctx = build_lora_context_from_slot_list([0] * warmup_num_seqs)
+                dit_ctx = build_lora_context_from_slot_list([0] * (warmup_num_seqs * dit_rows_per_sample))
+                set_lora_context(lm_ctx, domain=LM_LORA_DOMAIN)
+                set_lora_context(proj_ctx, domain=PROJ_LORA_DOMAIN)
+                set_lora_context(dit_ctx, domain=DIT_LORA_DOMAIN)
+                _ = self.model(**warmup_inputs)
+
         reset_all_contexts()
         torch.cuda.empty_cache()
 

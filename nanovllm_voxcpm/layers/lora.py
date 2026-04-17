@@ -303,11 +303,27 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
         out_flat, _ = _flatten_tokens(qkv)
         splits = list(out_flat.split([self.q_size, self.kv_size, self.kv_size], dim=-1))
         target_to_output_index = {"q": 0, "k": 1, "v": 2}
-        backend = get_backend()
-        metadata = self._runtime_metadata()
-        output_slices = [splits[target_to_output_index[target]] for target in self.lora_targets]
         lora_a_slices = [self.lora_A[self.target_to_index[target]] for target in self.lora_targets]
         lora_b_slices = [getattr(self, f"lora_B_{target}") for target in self.lora_targets]
+        metadata = self._runtime_metadata()
+        backend = get_backend()
+        # Fast path: LoRA targets cover the full packed [q,k,v] layout in the
+        # natural contiguous order. We can let expand accumulate directly into
+        # out_flat and skip the slice->cat round-trip entirely.
+        if self.lora_targets == ["q", "k", "v"]:
+            backend.add_lora(
+                splits,  # views of out_flat in q,k,v order
+                x_flat,
+                lora_a_slices,
+                lora_b_slices,
+                indices=token_to_slot,
+                metadata=metadata,
+                scaling=1.0,
+                y_packed=out_flat,
+            )
+            return _restore_tokens(out_flat, original_shape)
+        # Fallback: partial target subset — use legacy packed staging buffer.
+        output_slices = [splits[target_to_output_index[target]] for target in self.lora_targets]
         updated_slices = backend.add_lora(
             output_slices,
             x_flat,
@@ -494,9 +510,24 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
         backend = get_backend()
         metadata = self._runtime_metadata()
         splits = list(out_flat.split(self.shard_output_sizes, dim=-1))
-        output_slices = [splits[target_idx] for target_idx in self.lora_targets]
         lora_a_slices = [self.lora_A[self.target_to_index[target_idx]] for target_idx in self.lora_targets]
         lora_b_slices = [getattr(self, f"lora_B_{target_idx}") for target_idx in self.lora_targets]
+        # Fast path: targets cover all output shards in natural order.
+        # Expand writes directly into out_flat; no split/cat round-trip.
+        if self.lora_targets == list(range(len(self.output_sizes))):
+            backend.add_lora(
+                splits,
+                x_flat,
+                lora_a_slices,
+                lora_b_slices,
+                indices=token_to_slot,
+                metadata=metadata,
+                scaling=1.0,
+                y_packed=out_flat,
+            )
+            return _restore_tokens(out_flat, original_shape)
+        # Fallback: partial target subset.
+        output_slices = [splits[target_idx] for target_idx in self.lora_targets]
         updated_slices = backend.add_lora(
             output_slices,
             x_flat,

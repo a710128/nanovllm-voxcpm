@@ -40,7 +40,13 @@ def _get_lora_a_ptr(lora_a_weights: list[torch.Tensor], device: torch.device):
 
 
 def _get_lora_b_ptr(lora_weights: list[torch.Tensor], offset_start: int, device: torch.device):
-    key = tuple(weight.data_ptr() for weight in lora_weights)
+    # NOTE: slice_start_tensor below is derived from offset_start (it is the
+    # running cumulative column offset for each slice in the packed output).
+    # The same lora_weights list can legitimately be called with different
+    # offset_start values (e.g. when the caller groups slices by (rank,
+    # hidden_out) and each group starts at its own column offset inside the
+    # packed output), so offset_start MUST be part of the cache key.
+    key = (offset_start, *(weight.data_ptr() for weight in lora_weights))
     if values := _LORA_B_PTR_DICT.get(key):
         return values
 

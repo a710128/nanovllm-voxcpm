@@ -19,19 +19,39 @@ class _FakePunicaBackend:
     def expand(self, hidden, lora_b, *, scaling):
         return torch.nn.functional.linear(hidden, lora_b) * scaling
 
-    def add_lora(self, y_slices, x, lora_a_slices, lora_b_slices, *, indices, metadata, scaling):
-        out_slices = [y.clone() for y in y_slices]
-        for token_idx in range(x.size(0)):
-            slot_id = int(indices[token_idx].item())
-            if slot_id < 0:
-                continue
-            for slice_idx, out in enumerate(out_slices):
-                hidden = self.shrink(x[token_idx : token_idx + 1], lora_a_slices[slice_idx][slot_id])
-                out[token_idx : token_idx + 1] = out[token_idx : token_idx + 1] + self.expand(
-                    hidden,
-                    lora_b_slices[slice_idx][slot_id],
-                    scaling=scaling,
-                )
+    def add_lora(
+        self,
+        y_slices,
+        x,
+        lora_a_slices,
+        lora_b_slices,
+        *,
+        indices,
+        metadata,
+        scaling,
+        y_packed=None,
+    ):
+        # The real backend runs outside autograd (triton kernels). Mirror that
+        # here so in-place writes into view-of-view tensors are permitted.
+        with torch.no_grad():
+            if y_packed is not None:
+                # Fast path: slices are views into y_packed; accumulate in place.
+                out_slices = list(y_slices)
+            else:
+                # Legacy path: do not mutate caller's y_slices.
+                out_slices = [y.detach().clone() for y in y_slices]
+            for token_idx in range(x.size(0)):
+                slot_id = int(indices[token_idx].item())
+                if slot_id < 0:
+                    continue
+                for slice_idx, out in enumerate(out_slices):
+                    hidden = self.shrink(x[token_idx : token_idx + 1], lora_a_slices[slice_idx][slot_id])
+                    update = self.expand(
+                        hidden,
+                        lora_b_slices[slice_idx][slot_id],
+                        scaling=scaling,
+                    )
+                    out[token_idx : token_idx + 1].add_(update)
         return out_slices
 
 

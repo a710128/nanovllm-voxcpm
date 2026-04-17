@@ -189,6 +189,9 @@ def test_vendored_backend_groups_shrink_and_expand_independently():
         hidden = torch.nn.functional.linear(x, lora_a[0]) * 0.5
         expected.append(y_slice + torch.nn.functional.linear(hidden, lora_b[0]))
     assert shrink_calls == [3]
+    # Slices split into two expand buckets by output width (4 vs 2), since
+    # mixing slices of different hidden_out in a single kernel call would let
+    # the kernel touch out-of-range columns for the narrower slices.
     assert expand_calls == [1, 2]
     for output, expected_output in zip(outputs, expected):
         assert torch.allclose(output, expected_output)
