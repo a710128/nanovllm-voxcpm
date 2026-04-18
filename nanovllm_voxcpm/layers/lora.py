@@ -101,8 +101,51 @@ class _LoRALayerBase(nn.Module):
                     "LoRA token_to_slot length does not match flattened input rows: "
                     f"token_to_slot={token_to_slot.numel()} rows={x_flat.size(0)}"
                 )
-            return token_to_slot.to(dtype=torch.int64)
+            # Per-layer empty-slot shortcut: if every active slot in this batch
+            # has ``effective_lora_rank == 0`` for THIS module, the LoRA
+            # adapter does not touch this linear at all — skip the shrink+expand
+            # kernels entirely. Real-world adapters often cover only a subset
+            # of the base model's linears (e.g. only Q/K/V/O but not MLP), so
+            # this is a large multiplicative win across every MLP layer.
+            #
+            # IMPORTANT: we must NOT take this shortcut while CUDA graphs are
+            # being captured. The captured decode graph is reused for every
+            # request; skipping the LoRA kernels at capture time would bake
+            # "no LoRA here" into the graph, and later adapters that DO touch
+            # this module would silently produce incorrect output.
+            if not _is_cuda_graph_capture() and self._batch_has_no_effective_rank(context):
+                return None
+            # Pass int32 straight through — the Triton shrink/expand kernels
+            # consume int32 metadata, and casting to int64 here was a tiny but
+            # frequent (per LoRA layer × per step) GPU launch.
+            return token_to_slot
         return None
+
+    def _batch_has_no_effective_rank(self, context) -> bool:
+        """Return True iff every slot used by this batch is empty (rank=0) in
+        this module.
+
+        The check uses the host-side ``_effective_lora_rank_values`` mirror so
+        we never touch the GPU. When the batch plan provides
+        ``active_slot_ids`` (runner fast path) we iterate only those; otherwise
+        we conservatively fall through and let the kernel run.
+        """
+        active = getattr(context, "active_slot_ids", None)
+        if active is None or active.is_cuda:
+            # Pre-built active_slot_ids are always on GPU. We mirror the list
+            # used to build them on CPU via LoRABatchPlan, but the context
+            # here doesn't carry that CPU copy — so for safety, check via the
+            # max slot id. If all slots on this module are empty, skip.
+            for rank in self._effective_lora_rank_values:
+                if rank > 0:
+                    return False
+            return True
+        for slot_id in active.tolist():
+            if int(slot_id) < 0:
+                continue
+            if self._effective_lora_rank_values[int(slot_id)] > 0:
+                return False
+        return True
 
     def _get_grouped_token_indices(self, token_to_slot: torch.Tensor, slot_id: int, context) -> torch.Tensor:
         if (
@@ -150,7 +193,14 @@ class _LoRALayerBase(nn.Module):
         context = get_lora_context(self.lora_domain)
         if context.token_to_slot is None:
             return None
-        return LoRAMetadata(
+        # Reuse the metadata view across every LoRA layer in the same step:
+        # all layers in a domain see the same context tensors, so the dataclass
+        # they would each build is identical. Caching avoids hundreds of
+        # dataclass allocations per decode step.
+        cached = context._cached_metadata
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        meta = LoRAMetadata(
             token_to_slot=context.token_to_slot,
             token_indices_sorted_by_slot=context.token_indices_sorted_by_slot,
             active_slot_ids=context.active_slot_ids,
@@ -159,6 +209,8 @@ class _LoRALayerBase(nn.Module):
             no_lora_flag=context.no_lora_flag,
             num_active_loras=context.num_active_loras,
         )
+        context._cached_metadata = meta
+        return meta
 
     @property
     def lora_enabled(self) -> bool:
@@ -296,10 +348,10 @@ class LoRAQKVParallelLinear(_LoRALayerBase):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         qkv = F.linear(x, self.weight, self.bias)
-        token_to_slot = self._resolve_token_slots(_flatten_tokens(x)[0])
+        x_flat, original_shape = _flatten_tokens(x)
+        token_to_slot = self._resolve_token_slots(x_flat)
         if token_to_slot is None:
             return qkv
-        x_flat, original_shape = _flatten_tokens(x)
         out_flat, _ = _flatten_tokens(qkv)
         splits = list(out_flat.split([self.q_size, self.kv_size, self.kv_size], dim=-1))
         target_to_output_index = {"q": 0, "k": 1, "v": 2}
@@ -502,10 +554,10 @@ class LoRAMergedColumnParallelLinear(_LoRALayerBase):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         result = F.linear(x, self.weight, self.bias)
-        token_to_slot = self._resolve_token_slots(_flatten_tokens(x)[0])
+        x_flat, original_shape = _flatten_tokens(x)
+        token_to_slot = self._resolve_token_slots(x_flat)
         if token_to_slot is None:
             return result
-        x_flat, original_shape = _flatten_tokens(x)
         out_flat, _ = _flatten_tokens(result)
         backend = get_backend()
         metadata = self._runtime_metadata()
@@ -678,9 +730,9 @@ class LoRARowParallelLinear(_LoRALayerBase):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight, self.bias if self.tp_rank == 0 else None)
-        token_to_slot = self._resolve_token_slots(_flatten_tokens(x)[0])
+        x_flat, original_shape = _flatten_tokens(x)
+        token_to_slot = self._resolve_token_slots(x_flat)
         if token_to_slot is not None:
-            x_flat, original_shape = _flatten_tokens(x)
             y_flat, _ = _flatten_tokens(y)
             backend = get_backend()
             metadata = self._runtime_metadata()
@@ -787,10 +839,10 @@ class LoRALinear(_LoRALayerBase):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight, self.bias)
-        token_to_slot = self._resolve_token_slots(_flatten_tokens(x)[0])
+        x_flat, original_shape = _flatten_tokens(x)
+        token_to_slot = self._resolve_token_slots(x_flat)
         if token_to_slot is None:
             return y
-        x_flat, original_shape = _flatten_tokens(x)
         y_flat, _ = _flatten_tokens(y)
         backend = get_backend()
         metadata = self._runtime_metadata()

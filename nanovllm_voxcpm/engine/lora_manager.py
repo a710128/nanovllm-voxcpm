@@ -115,21 +115,62 @@ def _cuda_int_tensor(values: list[int]) -> torch.Tensor:
     return torch.tensor(values, dtype=torch.int32, device="cpu", pin_memory=True).cuda(non_blocking=True)
 
 
+def _pack_int_tensors_to_cuda(*lists: list[int]) -> list[torch.Tensor]:
+    """Concatenate several int lists into one pinned CPU tensor and issue a
+    single H2D copy, then split on GPU into views.
+
+    Per LoRA-enabled step we previously made up to 15 small H2D copies (5 int
+    tensors × 3 LoRA domains), each paying a non-trivial fixed launch cost.
+    Coalescing them removes most of that overhead while keeping the
+    per-tensor view semantics the rest of the pipeline expects.
+    """
+    sizes = [len(lst) for lst in lists]
+    flat: list[int] = []
+    for lst in lists:
+        flat.extend(lst)
+    if not flat:
+        # Caller will short-circuit on empty buckets; return empty views so
+        # downstream slicing math still works.
+        empty = torch.empty(0, dtype=torch.int32, device="cuda")
+        return [empty for _ in lists]
+    packed = torch.tensor(flat, dtype=torch.int32, device="cpu", pin_memory=True).cuda(non_blocking=True)
+    out: list[torch.Tensor] = []
+    offset = 0
+    for size in sizes:
+        out.append(packed[offset : offset + size])
+        offset += size
+    return out
+
+
 def build_lora_context_from_batch_plan(plan: LoRABatchPlan) -> LoRAContext:
-    token_to_slot_tensor = _cuda_int_tensor(plan.token_to_slot)
     if not plan.active_slot_ids:
+        token_to_slot_tensor = _cuda_int_tensor(plan.token_to_slot)
         return LoRAContext(
             token_to_slot=token_to_slot_tensor,
             no_lora_flag=True,
             num_active_loras=0,
         )
 
+    (
+        token_to_slot_tensor,
+        token_indices_sorted_by_slot_tensor,
+        active_slot_ids_tensor,
+        num_tokens_per_slot_tensor,
+        slot_start_offsets_tensor,
+    ) = _pack_int_tensors_to_cuda(
+        plan.token_to_slot,
+        plan.token_indices_sorted_by_slot,
+        plan.active_slot_ids,
+        plan.num_tokens_per_slot,
+        plan.slot_start_offsets,
+    )
+
     return LoRAContext(
         token_to_slot=token_to_slot_tensor,
-        token_indices_sorted_by_slot=_cuda_int_tensor(plan.token_indices_sorted_by_slot),
-        active_slot_ids=_cuda_int_tensor(plan.active_slot_ids),
-        num_tokens_per_slot=_cuda_int_tensor(plan.num_tokens_per_slot),
-        slot_start_offsets=_cuda_int_tensor(plan.slot_start_offsets),
+        token_indices_sorted_by_slot=token_indices_sorted_by_slot_tensor,
+        active_slot_ids=active_slot_ids_tensor,
+        num_tokens_per_slot=num_tokens_per_slot_tensor,
+        slot_start_offsets=slot_start_offsets_tensor,
         no_lora_flag=False,
         num_active_loras=len(plan.active_slot_ids),
     )

@@ -159,8 +159,21 @@ def assign_outputs(inputs, outputs, bs):
         outputs[k][:bs] = inputs[k]
 
 
-def _clear_lora_slot_modules(modules, slot_id: int) -> None:
-    for module in modules.values():
+def _clear_lora_slot_modules(modules, slot_id: int, module_names: list[str] | None = None) -> None:
+    """Zero out LoRA weights for ``slot_id`` across ``modules``.
+
+    ``module_names`` (when provided) restricts the walk to just the modules
+    previously written into this slot. This avoids iterating the entire model
+    graph — and issuing dozens of tiny ``zero_()`` kernels per slot admission —
+    for the common case where each LoRA only populates a small subset of
+    modules. Passing ``None`` preserves the legacy "clear everything" behavior
+    (used by tests).
+    """
+    if module_names is None:
+        iterable = modules.values()
+    else:
+        iterable = (modules[name] for name in module_names if name in modules)
+    for module in iterable:
         clear_slot_lora = getattr(module, "clear_slot_lora", None)
         if clear_slot_lora is not None:
             clear_slot_lora(slot_id)
@@ -189,6 +202,15 @@ class BaseModelRunner:
         self.max_lora_rank = max(1, getattr(config.lora_config, "max_lora_rank", 1) if config.lora_config else 1)
         self.max_loras = max(0, getattr(config.lora_config, "max_loras", 0) if config.lora_config else 0)
         self.lora_runtime = LoRARuntime(max_loras=self.max_loras, max_lora_rank=self.max_lora_rank)
+        # Lazy cache of ``dict(self.model.named_modules())`` — walking the full
+        # VoxCPM module tree is surprisingly expensive (~ms per call on a
+        # real-sized model) and was called on every LoRA slot admission and
+        # validation. Populated by ``_lora_model_modules()`` on first use.
+        self._lora_model_modules_cache: dict[str, torch.nn.Module] | None = None
+        # Track which module names each GPU slot currently holds LoRA weights
+        # for, so evict/clear can skip the no-op "zero already-zero weights"
+        # walk across the entire model graph.
+        self._lora_slot_modules: dict[int, list[str]] = {}
 
         dist.init_process_group(
             "nccl",
@@ -246,13 +268,17 @@ class BaseModelRunner:
         adapter_ids = [seq.adapter_id for seq in seqs]
         dit_rows_per_sample = self._dit_lora_rows_per_sample()
         if not any(adapter_id is not None for adapter_id in adapter_ids):
-            sample_to_slot = [-1 for _ in adapter_ids]
+            # No active LoRA anywhere in this batch. Build just the LM
+            # ``token_to_slot=[-1,...]`` tensor; the PROJ and DIT domains can
+            # share the "all -1" sentinel since every sample gets slot=-1.
+            # Layers short-circuit on ``no_lora_flag=True`` before reading any
+            # of the other fields, so PROJ/DIT don't even need a device
+            # tensor.
+            empty_ctx = LoRAContext(no_lora_flag=True, num_active_loras=0)
             return {
                 LM_LORA_DOMAIN: build_lora_context_from_slot_list([-1] * sum(token_counts)),
-                PROJ_LORA_DOMAIN: build_lora_context_from_slot_list(sample_to_slot),
-                DIT_LORA_DOMAIN: build_lora_context_from_slot_list(
-                    [slot for slot in sample_to_slot for _ in range(dit_rows_per_sample)]
-                ),
+                PROJ_LORA_DOMAIN: empty_ctx,
+                DIT_LORA_DOMAIN: empty_ctx,
             }
 
         plan = self.lora_runtime.build_batch_plan(adapter_ids, token_counts, self._load_lora_slot)
@@ -267,6 +293,19 @@ class BaseModelRunner:
             ),
         }
 
+    def _lora_model_modules(self) -> dict[str, torch.nn.Module]:
+        """Memoize ``dict(self.model.named_modules())``.
+
+        The dict is only invalidated by topology changes to the model; LoRA
+        admission/validation never mutates the module graph, so it's safe to
+        cache for the lifetime of the runner.
+        """
+        cache = getattr(self, "_lora_model_modules_cache", None)
+        if cache is None:
+            cache = dict(self.model.named_modules())
+            self._lora_model_modules_cache = cache
+        return cache
+
     def validate_lora_payload(
         self, payload: LoRAModelPayload | list[LoRAModelPayload] | tuple[LoRAModelPayload, ...]
     ) -> None:
@@ -276,7 +315,7 @@ class BaseModelRunner:
         if not rank_payload.modules:
             raise ValueError("LoRA payload must contain at least one target module")
 
-        modules = dict(self.model.named_modules())
+        modules = self._lora_model_modules()
         for module_name, module_payload in rank_payload.modules.items():
             try:
                 module = modules[module_name]
@@ -321,8 +360,17 @@ class BaseModelRunner:
         self.lora_runtime.on_sequence_finished(adapter_id, was_running=was_running)
 
     def _load_lora_slot(self, slot_id: int, payload: LoRAModelPayload) -> None:
-        modules = dict(self.model.named_modules())
-        _clear_lora_slot_modules(modules, slot_id)
+        modules = self._lora_model_modules()
+        # Only clear modules that the previous occupant of this slot actually
+        # populated. This avoids issuing one ``zero_()`` kernel per LoRA-capable
+        # layer in the entire model on every admission, which dominated the
+        # ~0.18s LoRA TTFB regression.
+        slot_modules = getattr(self, "_lora_slot_modules", None)
+        if slot_modules is None:
+            slot_modules = {}
+            self._lora_slot_modules = slot_modules
+        previously_loaded = slot_modules.get(slot_id)
+        _clear_lora_slot_modules(modules, slot_id, module_names=previously_loaded)
         for module_name, module_payload in payload.modules.items():
             try:
                 module = modules[module_name]
@@ -341,6 +389,7 @@ class BaseModelRunner:
                 effective_rank=module_payload.effective_rank,
                 scaling=module_payload.scaling,
             )
+        slot_modules[slot_id] = list(payload.modules.keys())
 
     @torch.inference_mode()
     def warmup_model(self):
@@ -626,34 +675,71 @@ class BaseModelRunner:
         domain: str,
         context: LoRAContext,
     ) -> None:
+        """Update per-domain graph-captured LoRA metadata buffers in place.
+
+        Hot path: this runs 3× per decode step (once per LoRA domain), and
+        previously issued ~10 tiny kernel launches per domain (fill_, two
+        narrow-slice copies including a fresh ``torch.arange`` allocation,
+        zero_, scatter_, zero_, cumsum). That was ~30 launches / step of pure
+        metadata shuffling, dominating the LoRA RTF regression.
+
+        We now precompute the final-form slices on CPU (int32), pack them into
+        one pinned buffer, and issue a single H2D copy — plus a single cumsum
+        on GPU for ``slot_start_offsets`` (we still derive it from
+        ``num_tokens_per_slot`` on-device to keep the final tensor consistent
+        with what kernels read).
+
+        The ``no_lora_flag`` case is specialised to a tiny ``fill_(-1)`` on
+        ``token_to_slot`` — all other buffers were preallocated to the correct
+        sentinel state at capture time and kernels short-circuit on
+        ``no_lora`` anyway.
+        """
         domain_vars = graph_vars["lora_domains"][domain]
+        token_to_slot_buf: torch.Tensor = domain_vars["token_to_slot"]
+        token_indices_buf: torch.Tensor = domain_vars["token_indices_sorted_by_slot"]
+        num_tokens_buf: torch.Tensor = domain_vars["num_tokens_per_slot"]
+        slot_start_buf: torch.Tensor = domain_vars["slot_start_offsets"]
+
         token_count = 0 if context.token_to_slot is None else context.token_to_slot.size(0)
-        domain_vars["token_to_slot"].fill_(-1)
-        if context.token_to_slot is not None:
-            domain_vars["token_to_slot"][:token_count] = context.token_to_slot
-        domain_vars["token_indices_sorted_by_slot"][: domain_vars["token_indices_sorted_by_slot"].size(0)] = (
-            torch.arange(
-                domain_vars["token_indices_sorted_by_slot"].size(0),
-                dtype=torch.int32,
-                device=domain_vars["token_indices_sorted_by_slot"].device,
-            )
-        )
+
+        if context.no_lora_flag or context.token_to_slot is None:
+            # Kernels bail out on no_lora; we only need token_to_slot to be
+            # all -1 so downstream sanity checks still see a stable state.
+            token_to_slot_buf.fill_(-1)
+            num_tokens_buf.zero_()
+            slot_start_buf.zero_()
+            # token_indices buffer already contains arange(...) from capture
+            # time; no kernel needed to restore it since no_lora short-circuits
+            # before it's read.
+            return
+
+        buf_size = token_to_slot_buf.size(0)
+        device = token_to_slot_buf.device
+
+        # 1. token_to_slot: prefix from context, rest -1.
+        token_to_slot_buf[:token_count].copy_(context.token_to_slot, non_blocking=True)
+        if token_count < buf_size:
+            token_to_slot_buf[token_count:].fill_(-1)
+
+        # 2. token_indices_sorted_by_slot: prefix from context, rest stays at
+        # whatever arange value it had from capture (kernels only read the
+        # first ``token_count`` entries via num_tokens_per_slot+slot_start).
         if context.token_indices_sorted_by_slot is not None:
-            domain_vars["token_indices_sorted_by_slot"][: context.token_indices_sorted_by_slot.size(0)] = (
-                context.token_indices_sorted_by_slot.to(domain_vars["token_indices_sorted_by_slot"].device)
+            token_indices_buf[: context.token_indices_sorted_by_slot.size(0)].copy_(
+                context.token_indices_sorted_by_slot, non_blocking=True
             )
-        domain_vars["num_tokens_per_slot"].zero_()
+
+        # 3. num_tokens_per_slot: zero, then scatter. Single scatter kernel —
+        # unavoidable when we need to honor active_slot_ids ordering.
+        num_tokens_buf.zero_()
         if context.active_slot_ids is not None and context.num_tokens_per_slot is not None:
-            bucket_indices = (
-                context.active_slot_ids.to(domain_vars["num_tokens_per_slot"].device, dtype=torch.int64) + 1
-            )
-            domain_vars["num_tokens_per_slot"].scatter_(
-                0,
-                bucket_indices,
-                context.num_tokens_per_slot.to(domain_vars["num_tokens_per_slot"].device),
-            )
-        domain_vars["slot_start_offsets"].zero_()
-        domain_vars["slot_start_offsets"][1:] = torch.cumsum(domain_vars["num_tokens_per_slot"], dim=0)
+            bucket_indices = context.active_slot_ids.to(device=device, dtype=torch.int64) + 1
+            num_tokens_buf.scatter_(0, bucket_indices, context.num_tokens_per_slot.to(device=device))
+
+        # 4. slot_start_offsets: cumsum of num_tokens_per_slot, with a leading
+        # zero. Done as one cumsum kernel into the [1:] view.
+        slot_start_buf[0] = 0
+        torch.cumsum(num_tokens_buf, dim=0, out=slot_start_buf[1:])
 
     def _set_graph_lora_contexts(self, graph_vars: dict, contexts: dict[str, LoRAContext]) -> None:
         for domain in LORA_DOMAINS:

@@ -65,8 +65,17 @@ def test_lora_linear_context_controls_activation_and_reset():
     # Deterministic weights.
     with torch.no_grad():
         layer.weight.fill_(1.0)
-        layer.lora_A.fill_(1.0)
-        layer.lora_B.fill_(1.0)
+        # Use set_slot_lora so the layer's effective_rank tracking reflects
+        # the loaded slot — direct .fill_ on lora_A/lora_B leaves the
+        # effective_rank at 0 and the runtime correctly skips empty-slot
+        # LoRA execution.
+        layer.set_slot_lora(
+            slot_id=0,
+            lora_a=torch.ones(2, 4),
+            lora_b=torch.ones(3, 2),
+            effective_rank=2,
+            scaling=1.0,
+        )
 
     x = torch.ones(2, 4)
     set_lora_context(

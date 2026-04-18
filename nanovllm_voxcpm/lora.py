@@ -62,6 +62,34 @@ _BACKEND_OVERRIDE: LoRABackend | None = None
 _PROBED_BACKEND: LoRABackend | None = None
 
 
+@dataclass(frozen=True)
+class _AddLoraPlan:
+    """Precomputed shrink/expand slice grouping for a fixed list of LoRA weights.
+
+    Layers always pass the same `nn.Parameter` instances, so the grouping by
+    `(rank, in_dim)` for shrink and `(rank, hidden_out)` for expand is a pure
+    function of those tensors' shapes. We compute it once and reuse, avoiding
+    several Python dict allocations per LoRA layer per step.
+
+    Attributes:
+        active: indices into the caller's slice lists that have non-empty
+            output (TP shards owning no rows are excluded).
+        shrink_groups: list of buckets; each bucket is the list of indices
+            into ``active`` that share the same A weight shape.
+        expand_groups: same idea for B weights.
+        shrink_ranks: per-bucket rank, parallel to ``shrink_groups``.
+        all_active_same_expand_group: True iff every slice is active and they
+            all share one ``(rank, hidden_out)`` bucket — enables the
+            zero-copy "expand straight into y_packed" fast path.
+    """
+
+    active: tuple[int, ...]
+    shrink_groups: tuple[tuple[int, ...], ...]
+    shrink_ranks: tuple[int, ...]
+    expand_groups: tuple[tuple[int, ...], ...]
+    all_active_same_expand_group: bool
+
+
 class _UnavailableBackend:
     def __init__(self, reason: str):
         self.reason = reason
@@ -91,6 +119,13 @@ class _UnavailableBackend:
 
 
 class _VendoredTritonPunicaBackend:
+    def __init__(self) -> None:
+        # Per-call grouping of shrink/expand slices depends only on weight
+        # shapes, which are fixed once modules are constructed. Cache by
+        # ``(id(lora_a_slices[0]), id(lora_a_slices[1]), ...)`` so each LoRA
+        # layer pays the Python grouping cost exactly once.
+        self._add_lora_plan_cache: dict[tuple, _AddLoraPlan] = {}
+
     def _ops(self):
         shrink_module = import_module("nanovllm_voxcpm.lora_ops.triton_ops.lora_shrink_op")
         expand_module = import_module("nanovllm_voxcpm.lora_ops.triton_ops.lora_expand_op")
@@ -112,11 +147,35 @@ class _VendoredTritonPunicaBackend:
         for group_lora_a in shrink_groups.values():
             utils_module._get_lora_a_ptr(group_lora_a, group_lora_a[0].device)
 
-        expand_groups: dict[tuple[int, int], list[torch.Tensor]] = {}
+        # Prime the lora_b pointer cache with the SAME offset/grouping
+        # combinations that ``add_lora`` will use at runtime, otherwise the
+        # first decode step (which runs inside CUDA graph capture) hits a
+        # cache miss and calls ``torch.tensor(...)`` mid-capture — illegal.
+        #
+        # Two patterns matter:
+        #   (a) all-active-same-expand-bucket fast path: every slice grouped
+        #       together with offset 0;
+        #   (b) per-bucket fallback with each bucket starting at its own
+        #       column offset (QKV is the canonical case: q at 0, k/v at
+        #       q_size).
+        # We prime both, plus the grouped offset_start variant the caller
+        # explicitly requested.
+        col_offsets = [0]
         for lora_b in lora_b_slices:
-            expand_groups.setdefault((lora_b.size(1), lora_b.size(-1)), []).append(lora_b)
-        for group_lora_b in expand_groups.values():
-            utils_module._get_lora_b_ptr(group_lora_b, offset_start, group_lora_b[0].device)
+            col_offsets.append(col_offsets[-1] + lora_b.size(1))
+
+        # Pattern (a): all slices, offset 0.
+        utils_module._get_lora_b_ptr(lora_b_slices, offset_start, lora_b_slices[0].device)
+
+        # Pattern (b): grouped by (rank, hidden_out), each group at the column
+        # offset of its first slice in the natural packed layout.
+        expand_groups: dict[tuple[int, int], list[int]] = {}
+        for slice_idx, lora_b in enumerate(lora_b_slices):
+            expand_groups.setdefault((lora_b.size(-1), lora_b.size(1)), []).append(slice_idx)
+        for group_indices in expand_groups.values():
+            group_lora_b = [lora_b_slices[i] for i in group_indices]
+            group_offset = col_offsets[group_indices[0]]
+            utils_module._get_lora_b_ptr(group_lora_b, group_offset, group_lora_b[0].device)
 
     def availability(self) -> LoRAAvailability:
         if not torch.cuda.is_available():
@@ -132,6 +191,51 @@ class _VendoredTritonPunicaBackend:
         kernel_meta = LoRAKernelMeta.make(max_loras=max(max_loras, 1), max_num_tokens=max(num_tokens, 1), device=device)
         kernel_meta.prepare_tensors(indices.to(device=device, dtype=torch.int32))
         return kernel_meta.meta_args(token_nums=num_tokens, specialize_active_lora=True)
+
+    def _get_plan(
+        self,
+        y_slices: list[torch.Tensor],
+        lora_a_slices: list[torch.Tensor],
+        lora_b_slices: list[torch.Tensor],
+    ) -> _AddLoraPlan:
+        # Key by tensor identity — parameters are never reassigned on a module
+        # once constructed, so this is stable across steps. We include the
+        # empty-vs-nonempty mask of y_slices because TP shards with no output
+        # rows get filtered out.
+        key = (
+            tuple(id(t) for t in lora_a_slices)
+            + tuple(id(t) for t in lora_b_slices)
+            + tuple(y.numel() > 0 for y in y_slices)
+        )
+        cached = self._add_lora_plan_cache.get(key)
+        if cached is not None:
+            return cached
+
+        active = tuple(i for i, y in enumerate(y_slices) if y.numel() > 0)
+        shrink_by_shape: dict[tuple[int, int], list[int]] = {}
+        for local_i, slice_idx in enumerate(active):
+            lora_a = lora_a_slices[slice_idx]
+            shrink_by_shape.setdefault((lora_a.size(-2), lora_a.size(-1)), []).append(local_i)
+        shrink_groups = tuple(tuple(g) for g in shrink_by_shape.values())
+        shrink_ranks = tuple(lora_a_slices[active[group[0]]].size(-2) for group in shrink_groups)
+
+        expand_by_shape: dict[tuple[int, int], list[int]] = {}
+        for local_i, slice_idx in enumerate(active):
+            lora_b = lora_b_slices[slice_idx]
+            expand_by_shape.setdefault((lora_b.size(-1), lora_b.size(1)), []).append(local_i)
+        expand_groups = tuple(tuple(g) for g in expand_by_shape.values())
+
+        all_active_same_expand_group = len(expand_groups) == 1 and len(active) == len(y_slices)
+
+        plan = _AddLoraPlan(
+            active=active,
+            shrink_groups=shrink_groups,
+            shrink_ranks=shrink_ranks,
+            expand_groups=expand_groups,
+            all_active_same_expand_group=all_active_same_expand_group,
+        )
+        self._add_lora_plan_cache[key] = plan
+        return plan
 
     def add_lora(
         self,
@@ -174,13 +278,11 @@ class _VendoredTritonPunicaBackend:
                 # Single-slice layers (row-parallel, plain linear) hand us the
                 # flat output directly; write in place.
                 y_packed = y_slices[0]
-                slice_offsets: list[int] | None = None
             else:
                 # Legacy fallback: allocate a contiguous packed buffer.
                 split_sizes = [y_slice.size(-1) for y_slice in y_slices]
                 y_packed = torch.cat(y_slices, dim=-1)
                 y_slices = list(y_packed.split(split_sizes, dim=-1))
-                slice_offsets = None  # contiguous, starts at 0
         else:
             if y_packed.dim() != 2:
                 raise ValueError("y_packed must be 2D [num_tokens, packed_hidden]")
@@ -188,43 +290,23 @@ class _VendoredTritonPunicaBackend:
         meta = metadata.as_kernel_metadata(x.size(0))
         lora_shrink, lora_expand = self._ops()
 
-        # Drop slices whose output is empty (e.g. TP shards that own no output
-        # rows for a target). They contribute nothing and complicate grouping.
-        active = [i for i, y in enumerate(y_slices) if y.numel() > 0]
+        plan = self._get_plan(y_slices, lora_a_slices, lora_b_slices)
+        active = plan.active
         if not active:
             return list(y_slices)
 
         # Grouped shrink: one kernel call per (rank, in_dim) bucket.
-        # tmp_slices[i] = intermediate [num_tokens, rank] for active[i].
         tmp_slices: list[torch.Tensor | None] = [None] * len(active)
-        shrink_groups: dict[tuple[int, int], list[int]] = {}
-        for local_i, slice_idx in enumerate(active):
-            lora_a = lora_a_slices[slice_idx]
-            shrink_groups.setdefault((lora_a.size(-2), lora_a.size(-1)), []).append(local_i)
-
-        for group_local in shrink_groups.values():
-            rank = lora_a_slices[active[group_local[0]]].size(-2)
+        for group_local, rank in zip(plan.shrink_groups, plan.shrink_ranks):
             tmp = torch.empty((len(group_local), x.size(0), rank), dtype=x.dtype, device=x.device)
             lora_shrink(x, [lora_a_slices[active[i]] for i in group_local], tmp, *meta, scaling)
             for t_idx, local_i in enumerate(group_local):
                 tmp_slices[local_i] = tmp[t_idx]
 
-        # Grouped expand by (rank, hidden_out). _lora_expand_kernel treats
-        # ``N = max(hidden_sizes)`` as the loop bound for ALL slices, so mixing
-        # slices of different output widths is only safe when every slice has
-        # the same hidden dim — otherwise the kernel touches out-of-range
-        # columns for the narrower slices and can trip illegal memory access
-        # when writing into a tightly packed output buffer.
-        expand_groups: dict[tuple[int, int], list[int]] = {}
-        for local_i, slice_idx in enumerate(active):
-            lora_b = lora_b_slices[slice_idx]
-            expand_groups.setdefault((lora_b.size(-1), lora_b.size(1)), []).append(local_i)
-
-        if y_packed is not None and len(expand_groups) == 1 and len(active) == len(y_slices):
-            # Fast path: every slice active, same rank and hidden dim, slices
-            # are views of y_packed laid out contiguously — one expand call,
-            # accumulating straight into y_packed.
-            group_local = next(iter(expand_groups.values()))
+        # Fast path: every slice active, all in one (rank, hidden_out) bucket —
+        # single expand call, accumulating straight into y_packed.
+        if plan.all_active_same_expand_group:
+            group_local = plan.expand_groups[0]
             group_tmp = (
                 torch.stack([tmp_slices[i] for i in group_local])
                 if len(group_local) > 1
@@ -240,28 +322,22 @@ class _VendoredTritonPunicaBackend:
             )
             return list(y_slices)
 
-        # Fallback: group by (rank, hidden_out). Within each group, if the
-        # slices are a contiguous span in y_packed we can still expand in
-        # place by supplying ``offset_start`` = the column where the group
-        # begins. This keeps the hot path zero-copy for the common QKV
-        # layout (group 1 = q at col 0; group 2 = k,v contiguous starting
-        # at col q_size).
+        # Fallback: per-group expand. Contiguous-span groups write directly
+        # into y_packed with an offset; non-contiguous groups stage through a
+        # temporary buffer (rare).
         outputs = list(y_slices)
-        # Precompute running column offsets of each slice in the natural
-        # packed layout (i.e. concatenation order of y_slices).
         col_offsets = [0]
         for y in y_slices:
             col_offsets.append(col_offsets[-1] + y.size(-1))
 
-        for group_local in expand_groups.values():
+        for group_local in plan.expand_groups:
             group_tmp_slices = [tmp_slices[i] for i in group_local]
             if any(t is None for t in group_tmp_slices):
                 raise RuntimeError("LoRA shrink did not produce all intermediate slices")
-            group_tmp = torch.stack(group_tmp_slices)
+            group_tmp = torch.stack(group_tmp_slices) if len(group_tmp_slices) > 1 else group_tmp_slices[0].unsqueeze(0)
             group_slice_ids = [active[i] for i in group_local]
 
-            # Contiguous-in-y_packed fast sub-path.
-            is_contiguous_span = y_packed is not None and all(
+            is_contiguous_span = all(
                 group_slice_ids[k] + 1 == group_slice_ids[k + 1] for k in range(len(group_slice_ids) - 1)
             )
             if is_contiguous_span:
@@ -276,7 +352,6 @@ class _VendoredTritonPunicaBackend:
                 )
                 continue
 
-            # Slow sub-path: stage into a dedicated packed buffer.
             stage = torch.cat([y_slices[idx] for idx in group_slice_ids], dim=-1)
             lora_expand(
                 group_tmp,

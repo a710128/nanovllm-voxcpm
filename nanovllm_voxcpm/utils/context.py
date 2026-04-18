@@ -28,6 +28,11 @@ class LoRAContext:
     slot_start_offsets: torch.Tensor | None = None
     no_lora_flag: bool = True
     num_active_loras: int = 0
+    # Cached `LoRAMetadata` view of this context. Layers all build an identical
+    # metadata object from the same context per step; we materialize it lazily
+    # once per context instance and reuse across every LoRA-enabled layer in
+    # the model. Cleared by ``set_lora_context`` (i.e. fresh each step).
+    _cached_metadata: object | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -125,6 +130,11 @@ def set_lora_context(
     *,
     domain: str = LM_LORA_DOMAIN,
 ):
+    # Defensively invalidate any per-step metadata view cached by layers in a
+    # prior step. Engines in this repo build a fresh ``LoRAContext`` per step,
+    # so this is normally a no-op, but it keeps ``_cached_metadata`` honest if
+    # a caller mutates and reuses the same instance across steps.
+    lora_context._cached_metadata = None
     _LORA_CONTEXTS.domains[domain] = lora_context
 
 
