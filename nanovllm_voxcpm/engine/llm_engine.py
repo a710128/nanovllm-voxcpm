@@ -184,6 +184,9 @@ class LLMEngineBase:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
+        if not seqs:
+            return seqs
+
         runner_tasks = [self.preprocess_seq(seq, is_prefill) for seq in seqs]
         outputs = self.model_runner.call("run", runner_tasks, is_prefill)
 

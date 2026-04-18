@@ -294,6 +294,67 @@ def test_scheduler_stops_prefill_when_capacity_cannot_allocate(tmp_path, monkeyp
     assert list(s.seq_id for s in sched.waiting) == ["blocked", "tail"]
 
 
+def test_scheduler_returns_empty_when_cancel_empties_running_and_waiting_cannot_fit(tmp_path, monkeypatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    from nanovllm_voxcpm.config import Config
+    from nanovllm_voxcpm.engine.scheduler import Scheduler
+    from nanovllm_voxcpm.engine.sequence import Sequence, SequenceStatus
+
+    cfg = Config(
+        model=str(model_dir),
+        max_num_batched_tokens=4096,
+        max_num_seqs=4,
+        max_model_len=512,
+        kvcache_block_size=256,
+        num_kvcache_blocks=8,
+        tensor_parallel_size=1,
+    )
+    sched = Scheduler(cfg)
+
+    running = Sequence("running", list(range(128)), cfg.kvcache_block_size)
+    pending = Sequence("pending", list(range(128)), cfg.kvcache_block_size)
+    sched.add(running)
+    sched.schedule()
+    sched.add(pending)
+
+    sched.cancel("running")
+    assert not sched.running
+
+    monkeypatch.setattr(sched.block_manager, "can_allocate", lambda seq: False)
+
+    seqs, is_prefill = sched.schedule()
+
+    assert seqs == []
+    assert is_prefill is False
+    assert pending.status == SequenceStatus.WAITING
+
+
+def test_llm_engine_step_returns_on_empty_schedule_without_runner_call():
+    from nanovllm_voxcpm.engine.llm_engine import LLMEngineBase
+
+    class _Scheduler:
+        def schedule(self):
+            return [], False
+
+    class _Runner:
+        def call(self, *args, **kwargs):
+            raise AssertionError("model_runner.call should not be invoked for an empty schedule")
+
+    engine = object.__new__(LLMEngineBase)
+    engine.scheduler = _Scheduler()
+    engine.model_runner = _Runner()
+    engine.preprocess_seq = lambda seq, is_prefill: (_ for _ in ()).throw(
+        AssertionError("preprocess_seq should not be invoked for an empty schedule")
+    )
+    engine.postprocess_seq = lambda seq, output, is_prefill: (_ for _ in ()).throw(
+        AssertionError("postprocess_seq should not be invoked for an empty schedule")
+    )
+
+    assert engine.step() == []
+
+
 def test_scheduler_preempts_other_running_sequence_when_decode_needs_capacity(tmp_path, monkeypatch):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
