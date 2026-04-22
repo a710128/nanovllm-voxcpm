@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 import torch
 
-
 LM_LORA_DOMAIN = "lm_domain"
 PROJ_LORA_DOMAIN = "proj_domain"
 DIT_LORA_DOMAIN = "dit_domain"

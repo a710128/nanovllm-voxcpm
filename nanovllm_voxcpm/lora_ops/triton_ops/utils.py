@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TypeAlias
 
 import torch
 
 _LORA_A_PTR_DICT: dict[tuple[int, ...], tuple[torch.Tensor, int, int, int]] = {}
-_LORA_B_PTR_DICT: dict[tuple[int, ...], tuple[object, object, object, object, object, object, bool, int]] = {}
+TensorOrInt: TypeAlias = torch.Tensor | int
+_LORA_B_PTR_DICT: dict[
+    tuple[int, ...], tuple[TensorOrInt, TensorOrInt, TensorOrInt, TensorOrInt, TensorOrInt, TensorOrInt, bool, int]
+] = {}
 
 
 def _get_lora_a_ptr(lora_a_weights: list[torch.Tensor], device: torch.device):
@@ -72,6 +76,7 @@ def _get_lora_b_ptr(lora_weights: list[torch.Tensor], offset_start: int, device:
         slice_offset += lora_b_weight.size(1)
         hidden_sizes.append(lora_b_weight.size(1))
 
+    slice_start_tensor: TensorOrInt
     if len(lora_weights) > 1:
         lora_ptr_tensor = torch.tensor(tensor_ptrs, device=device, dtype=torch.uint64)
         slice_start_tensor = torch.tensor(slice_offset_lst, device=device, dtype=torch.uint64)
@@ -85,10 +90,10 @@ def _get_lora_b_ptr(lora_weights: list[torch.Tensor], offset_start: int, device:
         and len(set(lora_strides_d2)) == 1
         and len(set(hidden_sizes)) == 1
     ):
-        lora_strides_d0_tensor = lora_strides_d0[0]
-        lora_strides_d1_tensor = lora_strides_d1[0]
-        lora_strides_d2_tensor = lora_strides_d2[0]
-        hidden_sizes_tensor = hidden_sizes[0]
+        lora_strides_d0_tensor: TensorOrInt = lora_strides_d0[0]
+        lora_strides_d1_tensor: TensorOrInt = lora_strides_d1[0]
+        lora_strides_d2_tensor: TensorOrInt = lora_strides_d2[0]
+        hidden_sizes_tensor: TensorOrInt = hidden_sizes[0]
         same_stride = True
     else:
         lora_strides_d0_tensor = torch.tensor(lora_strides_d0, device=device)

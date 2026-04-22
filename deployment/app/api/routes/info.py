@@ -30,8 +30,9 @@ async def info(request: Request, server: Any = Depends(get_server)) -> InfoRespo
     registered_loras = [str(item["name"]) for item in await server.list_loras()]
     model_architecture = getattr(request.app.state, "model_architecture", None)
     lora_config = None
-    if getattr(cfg, "lora", None) is not None and model_architecture is not None:
-        lora_config = materialize_lora_config(cfg.lora, model_architecture)
+    cfg_lora = getattr(cfg, "lora", None)
+    if cfg_lora is not None and model_architecture is not None:
+        lora_config = materialize_lora_config(cfg_lora, model_architecture)
     return InfoResponse(
         model=ModelInfo(
             sample_rate=int(model_info["sample_rate"]),

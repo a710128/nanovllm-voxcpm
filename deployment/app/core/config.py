@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-
 ALL_LINEAR_LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 VOXCPM_PROJ_LORA_TARGETS = ("enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj")
 VOXCPM2_PROJ_LORA_TARGETS = (*VOXCPM_PROJ_LORA_TARGETS, "fusion_concat_proj")
@@ -218,6 +217,7 @@ def _get_optional_str_list_env(name: str) -> tuple[str, ...] | None:
 
 
 def materialize_lora_config(config: RuntimeLoRAConfig, architecture: str) -> MaterializedRuntimeLoRAConfig:
+    default_proj_targets: tuple[str, ...]
     if architecture == "voxcpm":
         default_proj_targets = VOXCPM_PROJ_LORA_TARGETS
     elif architecture == "voxcpm2":

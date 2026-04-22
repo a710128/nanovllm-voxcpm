@@ -129,6 +129,8 @@ def lora_expand(
     block_m = kernel_config["block_m"]
     block_n = kernel_config["block_n"]
     block_k = kernel_config["block_k"]
+    if block_k is None:
+        raise RuntimeError("Invalid expand kernel config")
     even_k = K % block_k == 0
     grid = (triton.cdiv(M, block_m) * triton.cdiv(max_n, block_n), num_slices, num_active_loras)
     use_gdc = supports_pdl(inputs.device)

@@ -109,7 +109,7 @@ class Scheduler:
         scheduled_seqs = []
         num_seqs = 0
         num_batched_tokens = 0
-        deferred_waiting = deque()
+        deferred_waiting: deque[Sequence] = deque()
         waiting_len = len(self.waiting)
         for _ in range(waiting_len):
             if not self.waiting or num_seqs >= self.max_num_seqs:

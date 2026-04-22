@@ -307,11 +307,15 @@ class _VendoredTritonPunicaBackend:
         # single expand call, accumulating straight into y_packed.
         if plan.all_active_same_expand_group:
             group_local = plan.expand_groups[0]
-            group_tmp = (
-                torch.stack([tmp_slices[i] for i in group_local])
-                if len(group_local) > 1
-                else tmp_slices[group_local[0]].unsqueeze(0)
-            )
+            fast_path_tensors = [tmp_slices[i] for i in group_local]
+            if any(tensor is None for tensor in fast_path_tensors):
+                raise RuntimeError("LoRA shrink did not produce all intermediate slices")
+            group_tmp_ready: list[torch.Tensor] = []
+            for tensor in fast_path_tensors:
+                if tensor is None:
+                    raise RuntimeError("LoRA shrink did not produce all intermediate slices")
+                group_tmp_ready.append(tensor)
+            group_tmp = torch.stack(group_tmp_ready) if len(group_local) > 1 else group_tmp_ready[0].unsqueeze(0)
             lora_expand(
                 group_tmp,
                 [lora_b_slices[active[i]] for i in group_local],
@@ -334,7 +338,16 @@ class _VendoredTritonPunicaBackend:
             group_tmp_slices = [tmp_slices[i] for i in group_local]
             if any(t is None for t in group_tmp_slices):
                 raise RuntimeError("LoRA shrink did not produce all intermediate slices")
-            group_tmp = torch.stack(group_tmp_slices) if len(group_tmp_slices) > 1 else group_tmp_slices[0].unsqueeze(0)
+            fallback_group_tmp_ready: list[torch.Tensor] = []
+            for tensor in group_tmp_slices:
+                if tensor is None:
+                    raise RuntimeError("LoRA shrink did not produce all intermediate slices")
+                fallback_group_tmp_ready.append(tensor)
+            group_tmp = (
+                torch.stack(fallback_group_tmp_ready)
+                if len(fallback_group_tmp_ready) > 1
+                else fallback_group_tmp_ready[0].unsqueeze(0)
+            )
             group_slice_ids = [active[i] for i in group_local]
 
             is_contiguous_span = all(

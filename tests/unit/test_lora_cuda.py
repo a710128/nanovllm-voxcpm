@@ -3,7 +3,6 @@ import pytest
 torch = pytest.importorskip("torch")
 from nanovllm_voxcpm.utils.context import LoRAContext
 
-
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 
 

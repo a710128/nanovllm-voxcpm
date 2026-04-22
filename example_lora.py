@@ -6,7 +6,6 @@ import time
 from nanovllm_voxcpm.models.voxcpm2.config import LoRAConfig
 from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2ServerPool
 
-
 MODEL_NAME = "openbmb/VoxCPM2"
 LORA_NAME = "demo"
 LORA_PATH = "/path/to/lora/checkpoint"  # directory containing lora_weights.safetensors (+ optional lora_config.json)

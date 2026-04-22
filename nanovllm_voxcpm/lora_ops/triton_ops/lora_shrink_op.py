@@ -7,7 +7,6 @@ import triton.language as tl
 from nanovllm_voxcpm.lora_ops.triton_ops.kernel_utils import do_shrink_kernel
 from nanovllm_voxcpm.lora_ops.triton_ops.utils import _get_lora_a_ptr, get_lora_op_configs, supports_pdl
 
-
 _SMALL_M_THRESHOLD = 32
 _SMALL_M_MAX_ACTIVE_LORAS = 32
 _SMALL_M_MAX_BLOCK_RANK = 8
@@ -302,6 +301,8 @@ def lora_shrink(
     block_k = kernel_config["block_k"]
     split_k = kernel_config["split_k"]
     group_size_m = kernel_config["group_size_m"]
+    if block_k is None or split_k is None or group_size_m is None:
+        raise RuntimeError("Invalid shrink kernel config")
     even_k = K % (block_k * split_k) == 0
     grid = (split_k * triton.cdiv(M, block_m) * triton.cdiv(N, block_n), num_slices, num_active_loras)
     use_gdc = supports_pdl(inputs.device)

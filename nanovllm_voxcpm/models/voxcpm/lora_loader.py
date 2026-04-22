@@ -10,7 +10,6 @@ from safetensors import safe_open
 from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRAModulePayload
 from nanovllm_voxcpm.models.voxcpm.model import VoxCPMModel
 
-
 _LORA_WEIGHTS_FILE = "lora_weights.safetensors"
 _LORA_CONFIG_FILE = "lora_config.json"
 _TARGET_ORDER = {"q": 0, "k": 1, "v": 2}

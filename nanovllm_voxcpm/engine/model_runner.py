@@ -182,6 +182,7 @@ def _clear_lora_slot_modules(modules, slot_id: int, module_names: list[str] | No
 class BaseModelRunner:
     dit_lora_seq_len_offset = 0
     cfg_branches = 2
+    patch_size: int
 
     model: torch.nn.Module
 
@@ -376,9 +377,10 @@ class BaseModelRunner:
                 module = modules[module_name]
             except KeyError as exc:
                 raise ValueError(f"Unknown LoRA target module '{module_name}'") from exc
-            if not hasattr(module, "set_slot_lora"):
+            set_slot_lora = getattr(module, "set_slot_lora", None)
+            if set_slot_lora is None:
                 raise ValueError(f"Module '{module_name}' does not support LoRA slots")
-            module.set_slot_lora(
+            set_slot_lora(
                 slot_id=slot_id,
                 lora_a=module_payload.lora_a.to(device="cuda", non_blocking=True),
                 lora_b=(

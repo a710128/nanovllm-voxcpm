@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from pathlib import Path
+
 import torch
 from torch import nn
 from safetensors import safe_open
@@ -8,8 +8,6 @@ from safetensors import safe_open
 ShardId = str | int
 
 try:
-    from safetensors.torch import load_file as safetensors_load_file
-
     SAFETENSORS_AVAILABLE = True
 except ImportError:
     SAFETENSORS_AVAILABLE = False

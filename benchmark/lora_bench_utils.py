@@ -8,7 +8,6 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-
 ATTENTION_LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj")
 VOXCPM_PROJ_LORA_TARGETS = ("enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj")
 VOXCPM2_PROJ_LORA_TARGETS = (*VOXCPM_PROJ_LORA_TARGETS, "fusion_concat_proj")
