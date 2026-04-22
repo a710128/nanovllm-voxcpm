@@ -319,12 +319,15 @@ class AsyncVoxCPM2Server:
                 if res["type"] == "stream":
                     if res["id"] in self.stream_table:
                         await self.stream_table[res["id"]].put(res["data"])
+
                 elif res["id"] in self.op_table:
-                    if res["type"] == "response":
-                        self.op_table[res["id"]].set_result(res["data"] if "data" in res else None)
-                    else:
-                        self.op_table[res["id"]].set_exception(RuntimeError(res["error"]))
-                    del self.op_table[res["id"]]
+                    fut = self.op_table.pop(res["id"])
+                    if not fut.done():
+                        if res["type"] == "response":
+                            fut.set_result(res["data"] if "data" in res else None)
+                        else:
+                            fut.set_exception(RuntimeError(res["error"]))
+                    # else: future was cancelled (wait_for timeout etc) — skip set_result silently
         except asyncio.CancelledError:
             return
 
@@ -333,7 +336,10 @@ class AsyncVoxCPM2Server:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[Any] = loop.create_future()
         self.op_table[op_id] = fut
-        await asyncio.to_thread(self.queue_in.put, {"id": op_id, "type": cmd, "args": args, "kwargs": kwargs})
+        # queue_in is unbounded (maxsize=0); put_nowait() is instant and does not
+        # consume a thread pool slot. asyncio.to_thread() here starves recv_queue
+        # under high concurrent load.
+        self.queue_in.put_nowait({"id": op_id, "type": cmd, "args": args, "kwargs": kwargs})
         return await fut
 
     async def health(self) -> HealthResponse:
