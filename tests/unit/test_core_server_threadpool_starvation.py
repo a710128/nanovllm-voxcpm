@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import contextlib
 import json
 import queue
 import signal
 import threading
 from types import SimpleNamespace
-
-import pytest
 
 
 class _FakeLLM:
@@ -95,24 +92,15 @@ async def _exercise_control_plane_while_default_executor_is_saturated(server_mod
     server = async_server_cls(model_path=str(model_path))
 
     try:
+        await asyncio.wait_for(server.wait_for_ready(), timeout=0.2)
         await asyncio.wait_for(server.get_model_info(), timeout=0.2)
     finally:
-        server.queue_in.put({"id": "stop", "type": "stop", "args": (), "kwargs": {}})
-        server.queue_out.put({"type": "response", "id": "unused", "data": None})
-        server.recv_task.cancel()
         unblock_executor.set()
-        with contextlib.suppress(asyncio.CancelledError):
-            await server.recv_task
         await executor_blocker
-        server.process.join(timeout=1.0)
+        await server.stop()
         assert not server.process.is_alive()
 
 
-@pytest.mark.xfail(
-    reason="recv_queue must not depend on the default asyncio executor under load",
-    raises=asyncio.TimeoutError,
-    strict=True,
-)
 def test_voxcpm2_control_plane_survives_default_executor_starvation(monkeypatch, tmp_path):
     model_path = tmp_path / "model"
     model_path.mkdir()
@@ -124,11 +112,6 @@ def test_voxcpm2_control_plane_survives_default_executor_starvation(monkeypatch,
     asyncio.run(_exercise_control_plane_while_default_executor_is_saturated(server_mod, async_server_cls, model_path))
 
 
-@pytest.mark.xfail(
-    reason="submit and recv_queue must not depend on the default asyncio executor under load",
-    raises=asyncio.TimeoutError,
-    strict=True,
-)
 def test_voxcpm_control_plane_survives_default_executor_starvation(monkeypatch, tmp_path):
     model_path = tmp_path / "model"
     model_path.mkdir()

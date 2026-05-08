@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import os
+import threading
 import time
 import traceback
 import uuid
@@ -295,17 +296,36 @@ class AsyncVoxCPM2Server:
         self.process.start()
         loop = asyncio.get_running_loop()
         self._init_fut: asyncio.Future[None] = loop.create_future()
-        self.recv_task: asyncio.Task = asyncio.create_task(self.recv_queue())
         self.op_table: dict[str, asyncio.Future[Any]] = {}
         self.stream_table: dict[str, asyncio.Queue[Waveform | None]] = {}
+        self._queue_out_async: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._queue_out_stop = threading.Event()
+        self._queue_out_thread = threading.Thread(
+            target=self._queue_out_bridge,
+            args=(loop,),
+            name="voxcpm2-queue-out",
+            daemon=True,
+        )
+        self._queue_out_thread.start()
+        self.recv_task: asyncio.Task = asyncio.create_task(self.recv_queue())
+
+    def _queue_out_bridge(self, loop: asyncio.AbstractEventLoop) -> None:
+        while not self._queue_out_stop.is_set():
+            try:
+                res = self.queue_out.get(timeout=0.1)
+            except Empty:
+                continue
+            except (EOFError, OSError, ValueError):
+                return
+            try:
+                loop.call_soon_threadsafe(self._queue_out_async.put_nowait, res)
+            except RuntimeError:
+                return
 
     async def recv_queue(self) -> None:
         try:
             while True:
-                try:
-                    res = await asyncio.to_thread(self.queue_out.get, timeout=1)
-                except Empty:
-                    continue
+                res = await self._queue_out_async.get()
 
                 if res.get("type") == "init_ok":
                     if not self._init_fut.done():
@@ -374,6 +394,8 @@ class AsyncVoxCPM2Server:
         self.recv_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self.recv_task
+        self._queue_out_stop.set()
+        self._queue_out_thread.join(timeout=1.0)
         if graceful_stop and self.process.is_alive():
             await asyncio.to_thread(self.process.join, 5.0)
         if self.process.is_alive():
