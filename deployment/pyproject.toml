@@ -15,6 +15,12 @@ dependencies = [
     "lameenc",
     "boto3",
     "huggingface_hub",
+    "opuslib",
+    "google-generativeai",
+    "httpx",
+    "openai",
+    "python-dotenv",
+    "websockets",
 ]
 
 [tool.setuptools.packages.find]

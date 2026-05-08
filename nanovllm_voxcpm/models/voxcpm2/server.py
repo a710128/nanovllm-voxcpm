@@ -245,12 +245,20 @@ def main_loop(queue_in: mp.Queue, queue_out: mp.Queue, args, kwargs):
             if states["is_stoped"]:
                 break
 
-            output = srv.step()
-            for seq in output:
-                latest_waveform = seq.custom_payload.generated_waveforms[-1]
-                queue_out.put({"type": "stream", "id": seq.seq_id, "data": latest_waveform})
-                if seq.is_finished:
-                    queue_out.put({"type": "stream", "id": seq.seq_id, "data": None})
+            try:
+                output = srv.step()
+                for seq in output:
+                    latest_waveform = seq.custom_payload.generated_waveforms[-1]
+                    queue_out.put({"type": "stream", "id": seq.seq_id, "data": latest_waveform})
+                    if seq.is_finished:
+                        queue_out.put({"type": "stream", "id": seq.seq_id, "data": None})
+            except Exception as e:
+                # If step() crashes (e.g. CUDA OOM), broadcast the error
+                err_msg = traceback.format_exc()
+                queue_out.put({"type": "fatal_error", "error": err_msg})
+                # Attempt to gracefully stop
+                states["is_stoped"] = True
+                break
 
 
 class AsyncVoxCPM2Server:
@@ -302,10 +310,28 @@ class AsyncVoxCPM2Server:
     async def recv_queue(self) -> None:
         try:
             while True:
+                if not self.process.is_alive():
+                    err = RuntimeError("VoxCPM process died unexpectedly.")
+                    for q in self.stream_table.values():
+                        q.put_nowait(None)
+                    for fut in self.op_table.values():
+                        if not fut.done():
+                            fut.set_exception(err)
+                    return
+
                 try:
                     res = await asyncio.to_thread(self.queue_out.get, timeout=1)
                 except Empty:
                     continue
+
+                if res.get("type") == "fatal_error":
+                    err = RuntimeError(res.get("error", "fatal error in voxel step"))
+                    for q in self.stream_table.values():
+                        q.put_nowait(None)
+                    for fut in self.op_table.values():
+                        if not fut.done():
+                            fut.set_exception(err)
+                    return
 
                 if res.get("type") == "init_ok":
                     if not self._init_fut.done():
@@ -320,14 +346,13 @@ class AsyncVoxCPM2Server:
                     if res["id"] in self.stream_table:
                         await self.stream_table[res["id"]].put(res["data"])
 
-                elif res["id"] in self.op_table:
+                elif "id" in res and res["id"] in self.op_table:
                     fut = self.op_table.pop(res["id"])
                     if not fut.done():
                         if res["type"] == "response":
                             fut.set_result(res["data"] if "data" in res else None)
                         else:
                             fut.set_exception(RuntimeError(res["error"]))
-                    # else: future was cancelled (wait_for timeout etc) — skip set_result silently
         except asyncio.CancelledError:
             return
 

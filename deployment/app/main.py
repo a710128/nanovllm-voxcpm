@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
+
+# Load .env file from deployment directory before importing config.
+# Use absolute path and override=False to not clobber explicitly set env vars.
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path, override=False)
+else:
+    # Fallback: try relative to cwd (for 'fastapi run deployment/app/main.py' from repo root)
+    _alt_path = Path("deployment/.env")
+    if _alt_path.exists():
+        load_dotenv(_alt_path, override=False)
 
 from app.api.api import api_router
 from app.core.config import load_config
