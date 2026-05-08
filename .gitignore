@@ -132,7 +132,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+*.env
 .env
+.env.*
 .venv
 env/
 venv/
@@ -198,6 +200,37 @@ cython_debug/
 .cursorindexingignore
 
 *.wav
+
+# Audio samples / artifacts
+*.mp3
+*.opus
+*.ogg
+*.flac
+*.m4a
+
+# Local model/checkpoint artifacts
+latest/
+checkpoints/
+runs/
+outputs/
+*.safetensors
+*.pth
+*.pt
+*.ckpt
+
+# Local runtime outputs
+llm_response.txt
+trans.txt
+
+# OS / editor temp
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Ensure these are committed (even if broader rules are added later)
+!uv.lock
+!*.toml
 *.mp3
 !deployment/prompt_audio.wav
 *.pt

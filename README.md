@@ -1,3 +1,4 @@
+Modified nanovllm engine server to support websockets for full duplex communication
 # Nano-vLLM-VoxCPM
 
 An inference engine for VoxCPM based on Nano-vLLM.

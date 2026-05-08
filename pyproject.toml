@@ -23,6 +23,12 @@ dependencies = [
     "flash-attn",
     "soundfile>=0.13.1",
     "torchcodec",
+    "fastapi[standard]>=0.136.1",
+    "websockets>=16.0",
+    "google-generativeai>=0.8.6",
+    "python-dotenv>=1.2.2",
+    "opuslib>=3.0.1",
+    "prometheus-client>=0.25.0",
 ]
 
 [project.urls]
@@ -99,6 +105,9 @@ flash-attn = [
 
 [tool.uv.workspace]
 members = ["deployment"]
+
+[tool.uv.sources]
+flash-attn = { url = "https://github.com/adithyaxx/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu13torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 
 [dependency-groups]
 dev = [

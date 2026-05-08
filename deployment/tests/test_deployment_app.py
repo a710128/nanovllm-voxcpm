@@ -165,7 +165,7 @@ def test_info(app):
             "enable_dit": True,
             "enable_proj": True,
             "max_loras": 1,
-            "max_lora_rank": 32,
+            "max_lora_rank": 64,
             "target_modules_lm": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             "target_modules_dit": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             "target_proj_modules": ["enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj"],
@@ -179,6 +179,9 @@ def test_info_reflects_runtime_lora_disable_without_reloading_model(app):
         client.app.state.cfg = client.app.state.cfg.__class__(
             model_path=client.app.state.cfg.model_path,
             mp3=client.app.state.cfg.mp3,
+            opus=client.app.state.cfg.opus,
+            asr=client.app.state.cfg.asr,
+            llm=client.app.state.cfg.llm,
             server_pool=client.app.state.cfg.server_pool,
             lora=None,
         )
@@ -223,6 +226,9 @@ def test_register_lora_rejects_when_runtime_lora_disabled(app):
         client.app.state.cfg = client.app.state.cfg.__class__(
             model_path=client.app.state.cfg.model_path,
             mp3=client.app.state.cfg.mp3,
+            opus=client.app.state.cfg.opus,
+            asr=client.app.state.cfg.asr,
+            llm=client.app.state.cfg.llm,
             server_pool=client.app.state.cfg.server_pool,
             lora=None,
         )

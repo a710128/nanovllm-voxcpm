@@ -8,6 +8,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.info import router as info_router
 from app.api.routes.lora import router as lora_router
 from app.api.routes.metrics import router as metrics_router
+from app.api.routes.websocket import router as websocket_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -16,3 +17,4 @@ api_router.include_router(lora_router)
 api_router.include_router(metrics_router)
 api_router.include_router(encode_latents_router)
 api_router.include_router(generate_router)
+api_router.include_router(websocket_router)

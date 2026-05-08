@@ -78,6 +78,28 @@ class Mp3Config:
 
 
 @dataclass(frozen=True)
+class OpusConfig:
+    bitrate: int  # bits per second (e.g., 64000 for 64kbps)
+    frame_ms: int  # frame duration in milliseconds (5, 10, 20, 40, 60)
+
+
+@dataclass(frozen=True)
+class ASRConfig:
+    api_url: str  # Base URL for ASR API (e.g., http://localhost:8000)
+    model: str | None  # ASR model name (e.g., Qwen/Qwen3-ASR-1.7B)
+    timeout: float
+    api_key: str  # API key for ASR service (default "EMPTY" for local vLLM)
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    api_key: str
+    model: str
+    timeout: float
+    prompt_template: str
+
+
+@dataclass(frozen=True)
 class ServerPoolStartupConfig:
     max_num_batched_tokens: int
     max_num_seqs: int
@@ -115,12 +137,29 @@ class MaterializedRuntimeLoRAConfig:
 class ServiceConfig:
     model_path: str
     mp3: Mp3Config
+    opus: OpusConfig
+    asr: ASRConfig
+    llm: LLMConfig
     server_pool: ServerPoolStartupConfig
     lora: RuntimeLoRAConfig | None
 
 
+def _get_str_env(name: str, default: str) -> str:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return v
+
+
+def _get_required_str_env(name: str) -> str:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        raise RuntimeError(f"Required env {name} is not set")
+    return v
+
+
 def load_config() -> ServiceConfig:
-    model_path = os.path.expanduser(os.environ.get("NANOVLLM_MODEL_PATH", "~/VoxCPM1.5"))
+    model_path = os.path.expanduser(os.environ.get("NANOVLLM_MODEL_PATH", "/home/ubuntu/.cache/huggingface/hub/models--openbmb--VoxCPM2/snapshots/bffb3df5a29440629464e5e839f4d214c8714c3d"))
 
     mp3_bitrate_kbps = _get_int_env("NANOVLLM_MP3_BITRATE_KBPS", 192)
     mp3_quality = _get_int_env("NANOVLLM_MP3_QUALITY", 2)
@@ -128,6 +167,32 @@ def load_config() -> ServiceConfig:
         raise RuntimeError("NANOVLLM_MP3_BITRATE_KBPS must be > 0")
     if mp3_quality < 0 or mp3_quality > 2:
         raise RuntimeError("NANOVLLM_MP3_QUALITY must be in [0, 2]")
+
+    # Opus encoding config
+    opus_bitrate = _get_int_env("NANOVLLM_OPUS_BITRATE", 64000)
+    opus_frame_ms = _get_int_env("NANOVLLM_OPUS_FRAME_MS", 20)
+    if opus_bitrate <= 0:
+        raise RuntimeError("NANOVLLM_OPUS_BITRATE must be > 0")
+    if opus_frame_ms not in (5, 10, 20, 40, 60):
+        raise RuntimeError("NANOVLLM_OPUS_FRAME_MS must be one of: 5, 10, 20, 40, 60")
+
+    # ASR API config (vLLM with Qwen3-ASR using chat completions API)
+    asr_api_url = _get_str_env("NANOVLLM_ASR_API_URL", "http://localhost:8001")
+    asr_model = _get_str_env("NANOVLLM_ASR_MODEL", "Qwen/Qwen3-ASR-1.7B")
+    asr_timeout = _get_float_env("NANOVLLM_ASR_TIMEOUT", 30.0)
+    asr_api_key = _get_str_env("NANOVLLM_ASR_API_KEY", "EMPTY")
+    if asr_timeout <= 0:
+        raise RuntimeError("NANOVLLM_ASR_TIMEOUT must be > 0")
+
+    # LLM API config (Gemini)
+    # GEMINI_API_KEY is required only when WebSocket endpoint is used,
+    # so we don't make it required at config load time
+    gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+    gemini_model = _get_str_env("GEMINI_MODEL", "gpt-5.4-mini")
+    prompt_template = _get_str_env("GEMINI_PROMPT_TEMPLATE", "")
+    llm_timeout = _get_float_env("GEMINI_TIMEOUT", 60.0)
+    if llm_timeout <= 0:
+        raise RuntimeError("GEMINI_TIMEOUT must be > 0")
 
     lora_uri = os.environ.get("NANOVLLM_LORA_URI")
     lora_id = os.environ.get("NANOVLLM_LORA_ID")
@@ -141,8 +206,8 @@ def load_config() -> ServiceConfig:
     runtime_lora_enabled = _get_bool_env("NANOVLLM_LORA_ENABLED", False)
     runtime_lora_config: RuntimeLoRAConfig | None = None
     if runtime_lora_enabled:
-        lora_max_loras = _get_int_env("NANOVLLM_LORA_MAX_LORAS", 1)
-        lora_max_lora_rank = _get_int_env("NANOVLLM_LORA_MAX_LORA_RANK", 32)
+        lora_max_loras = _get_int_env("NANOVLLM_LORA_MAX_LORAS", 128)
+        lora_max_lora_rank = _get_int_env("NANOVLLM_LORA_MAX_LORA_RANK", 64)
         lora_enable_lm = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_LM")
         lora_enable_dit = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_DIT")
         lora_enable_proj = _get_optional_bool_env("NANOVLLM_LORA_ENABLE_PROJ")
@@ -192,6 +257,9 @@ def load_config() -> ServiceConfig:
     return ServiceConfig(
         model_path=model_path,
         mp3=Mp3Config(bitrate_kbps=mp3_bitrate_kbps, quality=mp3_quality),
+        opus=OpusConfig(bitrate=opus_bitrate, frame_ms=opus_frame_ms),
+        asr=ASRConfig(api_url=asr_api_url, model=asr_model, timeout=asr_timeout, api_key=asr_api_key),
+        llm=LLMConfig(api_key=gemini_api_key, model=gemini_model, timeout=llm_timeout, prompt_template=prompt_template),
         server_pool=ServerPoolStartupConfig(
             max_num_batched_tokens=pool_max_num_batched_tokens,
             max_num_seqs=pool_max_num_seqs,
@@ -214,6 +282,43 @@ def _get_optional_str_list_env(name: str) -> tuple[str, ...] | None:
     if os.environ.get(name) in (None, ""):
         return None
     return _get_str_list_env(name, ())
+
+
+VALID_SPEAKERS = ("alaa", "hammad", "hanan", "khalil")
+
+
+@dataclass(frozen=True)
+class SpeakerEnvConfig:
+    """Raw per-speaker paths and prompt template read from env vars."""
+
+    prompt_audio_path: str  # may be empty
+    prompt_text_path: str  # may be empty
+    ref_audio_path: str  # may be empty
+    ref_audio_format: str | None  # optional override
+    gemini_prompt_template: str  # may be empty → fallback to global
+
+
+def load_speaker_env_configs() -> dict[str, SpeakerEnvConfig]:
+    """Read per-speaker env vars for all speakers.
+
+    Env var pattern:
+        NANOVLLM_SPEAKER_<NAME>_PROMPT_AUDIO_PATH
+        NANOVLLM_SPEAKER_<NAME>_PROMPT_TEXT_PATH
+        NANOVLLM_SPEAKER_<NAME>_REF_AUDIO_PATH
+        NANOVLLM_SPEAKER_<NAME>_REF_AUDIO_FORMAT
+        GEMINI_PROMPT_TEMPLATE_<NAME>
+    """
+    speakers: dict[str, SpeakerEnvConfig] = {}
+    for name in VALID_SPEAKERS:
+        key = name.upper()
+        speakers[name] = SpeakerEnvConfig(
+            prompt_audio_path=os.environ.get(f"NANOVLLM_SPEAKER_{key}_PROMPT_AUDIO_PATH", "").strip(),
+            prompt_text_path=os.environ.get(f"NANOVLLM_SPEAKER_{key}_PROMPT_TEXT_PATH", "").strip(),
+            ref_audio_path=os.environ.get(f"NANOVLLM_SPEAKER_{key}_REF_AUDIO_PATH", "").strip(),
+            ref_audio_format=os.environ.get(f"NANOVLLM_SPEAKER_{key}_REF_AUDIO_FORMAT", "").strip() or None,
+            gemini_prompt_template=os.environ.get(f"GEMINI_PROMPT_TEMPLATE_{key}", "").strip(),
+        )
+    return speakers
 
 
 def materialize_lora_config(config: RuntimeLoRAConfig, architecture: str) -> MaterializedRuntimeLoRAConfig:

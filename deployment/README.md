@@ -190,3 +190,161 @@ Response:
 - headers:
   - `X-Audio-Sample-Rate`
   - `X-Audio-Channels`
+
+### LoRA Management
+
+Runtime LoRA adapters can be registered/unregistered dynamically without restarting the server.
+
+**Enable LoRA at startup:**
+```bash
+export NANOVLLM_LORA_ENABLED=true
+```
+
+#### Register LoRA Adapter
+
+`POST /loras`
+
+```bash
+curl -X POST http://localhost:8000/loras \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my_lora", "path": "/path/to/lora_weights.safetensors"}'
+```
+
+Request body:
+- `name`: Unique identifier for this adapter
+- `path`: Absolute path to LoRA checkpoint directory or `.safetensors` file
+
+Response: `{"name": "my_lora"}`
+
+#### List LoRA Adapters
+
+`GET /loras`
+
+```bash
+curl http://localhost:8000/loras
+```
+
+Response: `[{"name": "my_lora"}, {"name": "another_lora"}]`
+
+#### Use LoRA in Generation
+
+```bash
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"target_text": "Hello world", "lora_name": "my_lora"}'
+```
+
+#### Unregister LoRA Adapter
+
+`DELETE /loras/{name}`
+
+```bash
+curl -X DELETE http://localhost:8000/loras/my_lora
+```
+
+---
+
+## WebSocket Voice Pipeline
+
+Real-time voice-to-voice pipeline: **Audio → ASR → LLM → TTS → Audio**
+
+### Quick Start
+
+1. **Start ASR server** (vLLM with Qwen3-ASR):
+```bash
+vllm serve Qwen/Qwen3-ASR-1.7B --port 8001
+```
+
+2. **Set environment variables**:
+```bash
+export GEMINI_API_KEY=<your-key>
+export NANOVLLM_ASR_API_URL=http://localhost:8001
+```
+
+3. **Run the server**:
+```bash
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### WebSocket Endpoint
+
+**URL:** `ws://localhost:8000/ws`
+
+**Protocol:**
+
+```
+Client → Server:
+  {"type": "audio_chunk", "data": "<base64>", "format": "wav"}
+  {"type": "audio_end"}
+  {"type": "terminate"}
+
+Server → Client:
+  <binary Opus frames>
+  {"type": "complete"}
+  {"type": "error", "error": "..."}
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NANOVLLM_ASR_API_URL` | `http://localhost:8001` | ASR vLLM server URL |
+| `NANOVLLM_ASR_MODEL` | `Qwen/Qwen3-ASR-1.7B` | ASR model name |
+| `GEMINI_API_KEY` | (required) | Google Gemini API key |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | Gemini model |
+| `NANOVLLM_OPUS_BITRATE` | `64000` | Opus bitrate (bps) |
+| `NANOVLLM_OPUS_FRAME_MS` | `20` | Opus frame duration |
+
+#### Persistent TTS voice conditioning (WebSocket)
+
+These env vars are **optional** and are loaded **once at server startup**. If set, they apply to **every** WebSocket interaction and condition the TTS voice.
+
+- `NANOVLLM_WS_PROMPT_AUDIO_PATH`: server-local path to prompt audio (e.g. `/data/prompt.mp3`)
+- `NANOVLLM_WS_PROMPT_TEXT_PATH`: server-local path to a text file containing the transcript of the prompt audio (required when prompt audio is set)
+- `NANOVLLM_WS_PROMPT_AUDIO_FORMAT`: optional override (otherwise inferred from file suffix)
+
+Optional reference audio (VoxCPM2 only):
+
+- `NANOVLLM_WS_REF_AUDIO_PATH`: server-local path to reference audio
+- `NANOVLLM_WS_REF_AUDIO_FORMAT`: optional override
+
+### Test with Python
+
+```python
+import asyncio
+import base64
+import websockets
+import json
+
+async def test():
+    async with websockets.connect("ws://localhost:8000/ws") as ws:
+        # Send audio
+        with open("test.wav", "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode()
+        
+        await ws.send(json.dumps({"type": "audio_chunk", "data": audio_b64, "format": "wav"}))
+        await ws.send(json.dumps({"type": "audio_end"}))
+        
+        # Receive response
+        while True:
+            msg = await ws.recv()
+            if isinstance(msg, bytes):
+                print(f"Received {len(msg)} bytes of audio")
+            else:
+                data = json.loads(msg)
+                print(data)
+                if data.get("type") == "complete":
+                    break
+
+asyncio.run(test())
+```
+
+### Metrics
+
+Available at `GET /metrics`:
+
+- `nanovllm_websocket_connections_active` - Active connections
+- `nanovllm_websocket_connections_total` - Total connections by status
+- `nanovllm_websocket_messages_total` - Messages by direction/type
+- `nanovllm_pipeline_duration_seconds` - End-to-end latency
+- `nanovllm_pipeline_stage_duration_seconds` - Per-stage latency (asr/llm/tts)

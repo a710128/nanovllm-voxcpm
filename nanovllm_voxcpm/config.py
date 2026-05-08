@@ -12,7 +12,7 @@ class Config(Generic[T]):
     max_num_batched_tokens: int = 16384
     max_num_seqs: int = 512
     max_model_len: int = 4096
-    gpu_memory_utilization: float = 0.9
+    gpu_memory_utilization: float = 0.6
     tensor_parallel_size: int = 1
     enforce_eager: bool = False
     kvcache_block_size: int = 256
