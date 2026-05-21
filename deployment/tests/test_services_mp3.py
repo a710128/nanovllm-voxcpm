@@ -1,5 +1,8 @@
 import asyncio
+import concurrent.futures
 import sys
+import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -154,3 +157,112 @@ def test_stream_mp3_raises_if_pcm_conversion_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="MP3 encoder failed"):
         asyncio.run(run())
     assert dummy_ctr.count == 1
+
+
+def test_stream_mp3_survives_default_executor_starvation(monkeypatch):
+    from app.core.config import Mp3Config
+    import app.services.mp3 as mp3
+
+    class FakeEncoder:
+        def set_bit_rate(self, value):
+            pass
+
+        def set_in_sample_rate(self, value):
+            pass
+
+        def set_channels(self, value):
+            pass
+
+        def set_quality(self, value):
+            pass
+
+        def encode(self, pcm_bytes):
+            return b"frame" if pcm_bytes else b""
+
+        def flush(self):
+            return b"flush"
+
+    monkeypatch.setitem(sys.modules, "lameenc", types.SimpleNamespace(Encoder=FakeEncoder))
+    monkeypatch.setattr(mp3, "AUDIO_ENCODE_SECONDS", _DummyHistogram())
+    monkeypatch.setattr(mp3, "AUDIO_ENCODE_FAILURES_TOTAL", _DummyCounter())
+
+    chunks = [np.zeros((128,), dtype=np.float32) for _ in range(2)]
+
+    async def run() -> bytes:
+        loop = asyncio.get_running_loop()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        loop.set_default_executor(executor)
+        unblock_executor = threading.Event()
+        executor_blocker = loop.run_in_executor(executor, unblock_executor.wait)
+        await asyncio.sleep(0)
+
+        try:
+            out: list[bytes] = []
+            async for b in mp3.stream_mp3(
+                request=_FakeRequest(),
+                wav_chunks=_agen(chunks),
+                sample_rate=16000,
+                mp3=Mp3Config(bitrate_kbps=128, quality=2),
+            ):
+                out.append(b)
+            return b"".join(out)
+        finally:
+            unblock_executor.set()
+            await executor_blocker
+            executor.shutdown(wait=True)
+
+    data = asyncio.run(asyncio.wait_for(run(), timeout=1.0))
+    assert data == b"frameframeflush"
+
+
+def test_stream_mp3_close_cleans_up_threads(monkeypatch):
+    from app.core.config import Mp3Config
+    import app.services.mp3 as mp3
+
+    class FakeEncoder:
+        def set_bit_rate(self, value):
+            pass
+
+        def set_in_sample_rate(self, value):
+            pass
+
+        def set_channels(self, value):
+            pass
+
+        def set_quality(self, value):
+            pass
+
+        def encode(self, pcm_bytes):
+            return b"frame" if pcm_bytes else b""
+
+        def flush(self):
+            return b"flush"
+
+    def live_mp3_threads() -> set[int | None]:
+        return {
+            thread.ident
+            for thread in threading.enumerate()
+            if thread.is_alive() and (thread.name == "mp3-encoder" or thread.name.startswith("mp3-queue"))
+        }
+
+    monkeypatch.setitem(sys.modules, "lameenc", types.SimpleNamespace(Encoder=FakeEncoder))
+    monkeypatch.setattr(mp3, "AUDIO_ENCODE_SECONDS", _DummyHistogram())
+    monkeypatch.setattr(mp3, "AUDIO_ENCODE_FAILURES_TOTAL", _DummyCounter())
+
+    chunks = [np.zeros((128,), dtype=np.float32) for _ in range(32)]
+    before = live_mp3_threads()
+
+    async def run() -> bytes:
+        stream = mp3.stream_mp3(
+            request=_FakeRequest(),
+            wav_chunks=_agen(chunks),
+            sample_rate=16000,
+            mp3=Mp3Config(bitrate_kbps=128, quality=2),
+        )
+        try:
+            return await anext(stream)
+        finally:
+            await stream.aclose()
+
+    assert asyncio.run(asyncio.wait_for(run(), timeout=1.0)) == b"frame"
+    assert live_mp3_threads() == before

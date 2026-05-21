@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import queue
 import threading
 import time
@@ -39,6 +40,18 @@ async def stream_mp3(
     mp3_q: queue.Queue[bytes | None] = queue.Queue(maxsize=8)
     stop_evt = threading.Event()
     thread_exc: list[BaseException] = []
+    loop = asyncio.get_running_loop()
+    io_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="mp3-queue")
+
+    async def put_pcm(item: np.ndarray | None) -> None:
+        await loop.run_in_executor(io_executor, pcm_q.put, item)
+
+    def drain_queue(q: queue.Queue) -> None:
+        while True:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                return
 
     def encoder_thread() -> None:
         try:
@@ -95,10 +108,10 @@ async def stream_mp3(
                 if await request.is_disconnected():
                     stop_evt.set()
                     break
-                await asyncio.to_thread(pcm_q.put, chunk)
+                await put_pcm(chunk)
         finally:
             try:
-                await asyncio.to_thread(pcm_q.put, None)
+                await put_pcm(None)
             except Exception:
                 pass
 
@@ -106,7 +119,7 @@ async def stream_mp3(
 
     try:
         while True:
-            item = await asyncio.to_thread(mp3_q.get)
+            item = await loop.run_in_executor(io_executor, mp3_q.get)
             if item is None:
                 break
             yield item
@@ -115,6 +128,16 @@ async def stream_mp3(
     finally:
         stop_evt.set()
         producer_task.cancel()
+        drain_queue(pcm_q)
+        drain_queue(mp3_q)
+        try:
+            pcm_q.put_nowait(None)
+        except Exception:
+            pass
+        try:
+            mp3_q.put_nowait(None)
+        except Exception:
+            pass
         try:
             await producer_task
         except asyncio.CancelledError:
@@ -122,7 +145,6 @@ async def stream_mp3(
         except Exception:
             pass
         try:
-            await asyncio.to_thread(pcm_q.put, None)
-        except Exception:
-            pass
-        await asyncio.to_thread(enc_thread.join, 2.0)
+            await loop.run_in_executor(io_executor, enc_thread.join, 2.0)
+        finally:
+            io_executor.shutdown(wait=True, cancel_futures=True)

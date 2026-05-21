@@ -10,6 +10,7 @@ import torch.multiprocessing as mp
 from queue import Empty
 import traceback
 import uuid
+import threading
 import torchaudio
 import io
 import time
@@ -341,17 +342,36 @@ class AsyncVoxCPMServer:
         loop = asyncio.get_running_loop()
         self._init_fut: asyncio.Future[None] = loop.create_future()
 
-        self.recv_task: asyncio.Task = asyncio.create_task(self.recv_queue())
         self.op_table: dict[str, asyncio.Future[Any]] = {}
         self.stream_table: dict[str, asyncio.Queue[Waveform | None]] = {}
+        self._queue_out_async: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._queue_out_stop = threading.Event()
+        self._queue_out_thread = threading.Thread(
+            target=self._queue_out_bridge,
+            args=(loop,),
+            name="voxcpm-queue-out",
+            daemon=True,
+        )
+        self._queue_out_thread.start()
+        self.recv_task: asyncio.Task = asyncio.create_task(self.recv_queue())
+
+    def _queue_out_bridge(self, loop: asyncio.AbstractEventLoop) -> None:
+        while not self._queue_out_stop.is_set():
+            try:
+                res = self.queue_out.get(timeout=0.1)
+            except Empty:
+                continue
+            except (EOFError, OSError, ValueError):
+                return
+            try:
+                loop.call_soon_threadsafe(self._queue_out_async.put_nowait, res)
+            except RuntimeError:
+                return
 
     async def recv_queue(self) -> None:
         try:
             while True:
-                try:
-                    res = await asyncio.to_thread(self.queue_out.get, timeout=1)
-                except Empty:
-                    continue
+                res = await self._queue_out_async.get()
 
                 # Init handshake (sent once at process startup).
                 if res.get("type") == "init_ok":
@@ -370,12 +390,12 @@ class AsyncVoxCPMServer:
                     else:
                         print(f"Unknown stream_id: {res['id']}")
                 elif res["id"] in self.op_table:
-                    if res["type"] == "response":
-                        self.op_table[res["id"]].set_result(res["data"] if "data" in res else None)
-                        del self.op_table[res["id"]]
-                    else:
-                        self.op_table[res["id"]].set_exception(RuntimeError(res["error"]))
-                        del self.op_table[res["id"]]
+                    fut = self.op_table.pop(res["id"])
+                    if not fut.done():
+                        if res["type"] == "response":
+                            fut.set_result(res["data"] if "data" in res else None)
+                        else:
+                            fut.set_exception(RuntimeError(res["error"]))
                 else:
                     print(f"Unknown op_id: {res['id']}")
         except asyncio.CancelledError:
@@ -390,15 +410,7 @@ class AsyncVoxCPMServer:
 
         self.op_table[op_id] = fut
 
-        await asyncio.to_thread(
-            self.queue_in.put,
-            {
-                "id": op_id,
-                "type": cmd,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
+        self.queue_in.put_nowait({"id": op_id, "type": cmd, "args": args, "kwargs": kwargs})
         return await fut
 
     async def health(self) -> HealthResponse:
@@ -435,11 +447,10 @@ class AsyncVoxCPMServer:
                 pass
 
         self.recv_task.cancel()
-        # Ensure the background receiver task is actually done before closing queues.
-        # Cancellation may race with the underlying to_thread() call.
-        # In Python 3.10+, asyncio.CancelledError may not be an Exception.
         with contextlib.suppress(asyncio.CancelledError):
             await self.recv_task
+        self._queue_out_stop.set()
+        self._queue_out_thread.join(timeout=1.0)
 
         # If the child acknowledged stop, give it a chance to exit cleanly
         # before we escalate to terminate/kill.
