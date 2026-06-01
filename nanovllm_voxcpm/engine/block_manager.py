@@ -117,7 +117,15 @@ class BlockManager:
         return self.blocks[block_id]
 
     def _deallocate_block(self, block_id: int) -> None:
-        assert self.blocks[block_id].ref_count == 0
+        block = self.blocks[block_id]
+        assert block.ref_count == 0
+        if block.hash != -1:
+            # Prevent unbounded growth of hash_to_block_id by removing stale
+            # entries for freed blocks.  Without this the dict accumulates one
+            # entry per unique KV-block prefix across the lifetime of the
+            # process, degrading forward-mapping speed and GC behaviour over
+            # long-running deployments (hours/days).
+            self.hash_to_block_id.pop(block.hash, None)
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
