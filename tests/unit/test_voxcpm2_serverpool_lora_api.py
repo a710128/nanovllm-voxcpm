@@ -27,8 +27,9 @@ class _FakeServer:
         cfg_value=2.0,
         ref_audio_latents=None,
         lora_name=None,
+        seed=42
     ):
-        self.generate_calls.append({"lora_name": lora_name, "ref_audio_latents": ref_audio_latents})
+        self.generate_calls.append({"lora_name": lora_name, "ref_audio_latents": ref_audio_latents, "cfg_value": cfg_value, "seed": seed})
         yield "chunk"
 
 

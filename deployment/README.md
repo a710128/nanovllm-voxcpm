@@ -180,6 +180,11 @@ Request body (JSON):
 - Reference audio (optional, mutually exclusive):
   - wav reference: `ref_audio_wav_base64` + `ref_audio_wav_format`
   - latents reference: `ref_audio_latents_base64`
+- Additional options (optional):
+  - `seed`: optional fixed random seed for reproducible generation (int)
+  - `cfg_value`: classifier-free guidance scale (float, default: `1.5`)
+  - `temperature`: sampling temperature (float, default: `1.0`)
+  - `max_generate_length`: maximum number of model generation steps (int, default: `2000`)
 
 `ref_audio_*` is independent from the prompt fields, so you can combine reference audio with either zero-shot or prompted generation.
 

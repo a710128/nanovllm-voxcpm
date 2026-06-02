@@ -124,7 +124,13 @@ class VoxCPM2ServerImpl:
         cfg_value: float = 1.0,
         ref_audio_latents: bytes | None = None,
         lora_name: str | None = None,
+        seed: int | None = None,
     ) -> None:
+        if seed is not None:
+            import torch
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            
         if prompt_latents is None:
             if len(prompt_text) > 0:
                 raise ValueError("Prompt text is not allowed when prompt latents are not provided")
@@ -433,6 +439,7 @@ class AsyncVoxCPM2Server:
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
         lora_name: str | None = None,
+        seed: int | None = None
     ) -> AsyncGenerator[Waveform, None]:
         seq_id = gen_uuid()
         self.stream_table[seq_id] = asyncio.Queue()
@@ -449,6 +456,7 @@ class AsyncVoxCPM2Server:
                 cfg_value,
                 ref_audio_latents,
                 lora_name,
+                seed,
             )
             while True:
                 data = await self.stream_table[seq_id].get()
@@ -567,6 +575,7 @@ class AsyncVoxCPM2ServerPool:
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         if prompt_id is not None:
             if prompt_id not in self._prompt_pool:
@@ -595,6 +604,7 @@ class AsyncVoxCPM2ServerPool:
                 cfg_value,
                 ref_audio_latents,
                 lora_name,
+                seed,
             ):
                 yield data
         finally:
@@ -678,6 +688,7 @@ class SyncVoxCPM2ServerPool:
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         assert self.loop is not None
         async_gen = self.server_pool.generate(
@@ -690,6 +701,7 @@ class SyncVoxCPM2ServerPool:
             cfg_value,
             ref_audio_latents,
             lora_name,
+            seed,
         )
         try:
             while True:

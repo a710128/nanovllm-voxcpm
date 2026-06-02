@@ -488,6 +488,7 @@ async def _consume_one_in_process(
     temperature: float,
     cfg_value: float,
     lora_name: str | None,
+    seed: int | None,
 ) -> tuple[float, float, int]:
     """Return: ttfb_s, wall_s, total_samples."""
 
@@ -501,6 +502,7 @@ async def _consume_one_in_process(
         temperature=temperature,
         cfg_value=cfg_value,
         lora_name=lora_name,
+        seed=seed
     ):
         if first_chunk_t is None:
             first_chunk_t = time.perf_counter()
@@ -567,6 +569,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-generate-length", type=int, default=8000)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--cfg-value", type=float, default=2.0)
+    p.add_argument("--seed", type=int, default=None, help="Optional: fixed seed for generation")
     add_lora_args(p)
 
     p.add_argument(
@@ -675,6 +678,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                             "max_generate_length": int(args.max_generate_length),
                             "temperature": float(args.temperature),
                             "cfg_value": float(args.cfg_value),
+                            "seed": args.seed,
                         },
                         lora_name,
                     ),
@@ -712,6 +716,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                     temperature=float(args.temperature),
                     cfg_value=float(args.cfg_value),
                     lora_name=choose_lora_name(lora_names, lora_rng),
+                    seed=args.seed,
                 )
                 audio_s = (total_samples / float(sample_rate)) if (sample_rate and sample_rate > 0) else None
                 rtf = _rtf_excluding_ttfb(wall_s, ttfb_s, audio_s) if (audio_s is not None and audio_s > 0) else None

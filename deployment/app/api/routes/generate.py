@@ -171,6 +171,7 @@ async def generate(
         "temperature": req.temperature,
         "cfg_value": req.cfg_value,
         "lora_name": req.lora_name,
+        "seed": req.seed,
     }
     if ref_audio_latents is not None:
         generate_kwargs["ref_audio_latents"] = ref_audio_latents

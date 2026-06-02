@@ -100,6 +100,7 @@ async def _consume_one(
     temperature: float,
     cfg_value: float,
     lora_name: str | None,
+    seed: int | None,
 ) -> OneRequestResult:
     start = time.perf_counter()
     first_chunk_t = None
@@ -112,6 +113,7 @@ async def _consume_one(
         temperature=temperature,
         cfg_value=cfg_value,
         lora_name=lora_name,
+        seed=seed
     ):
         if first_chunk_t is None:
             first_chunk_t = time.perf_counter()
@@ -163,6 +165,7 @@ async def _run_iteration(
     sample_rate: int | None,
     lora_names: list[str],
     lora_rng: Any,
+    seed: int | None,
 ) -> IterationResult:
     start = time.perf_counter()
     tasks = [
@@ -174,6 +177,7 @@ async def _run_iteration(
                 temperature=temperature,
                 cfg_value=cfg_value,
                 lora_name=choose_lora_name(lora_names, lora_rng),
+                seed=seed,
             )
         )
         for _ in range(concurrency)
@@ -275,6 +279,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-generate-length", type=int, default=2000)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--cfg-value", type=float, default=2.0)
+    p.add_argument("--seed", type=int, default=None, help="Optional: fixed seed for generation")
     add_lora_args(p)
 
     p.add_argument("--concurrency", type=int, default=1, help="Number of concurrent requests")
@@ -370,6 +375,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                 sample_rate=sample_rate,
                 lora_names=lora_names,
                 lora_rng=lora_rng,
+                seed=args.seed,
             )
 
         # Measure
@@ -385,6 +391,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                     sample_rate=sample_rate,
                     lora_names=lora_names,
                     lora_rng=lora_rng,
+                    seed=args.seed,
                 )
             )
     finally:

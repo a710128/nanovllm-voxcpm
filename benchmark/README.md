@@ -5,7 +5,7 @@ End-to-end inference benchmarking for VoxCPM.
 ## Run
 
 ```bash
-uv run python benchmark/bench_inference.py --model ~/VoxCPM1.5 --concurrency 4 --iters 5 --warmup 1
+uv run python benchmark/bench_inference.py --model ~/VoxCPM1.5 --concurrency 4 --iters 5 --warmup 1 --seed 42
 ```
 
 Fixed-RPS TTFB (open-loop) for long-audio load:
@@ -31,6 +31,7 @@ Key flags:
 - `--devices`: CUDA devices, e.g. `0` or `0,1`
 - `--json-out`: write machine-readable results
 - `--max-loras`: enable LoRA when greater than `0` and register that many aliases from `--lora-path`
+- `--seed`: optional fixed random seed for reproducible generation
 
 Closed-loop "N users" benchmark (each user sends the next request immediately after the previous finishes):
 

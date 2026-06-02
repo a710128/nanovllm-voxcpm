@@ -125,7 +125,13 @@ class VoxCPMServerImpl:
         temperature: float = 1.0,
         cfg_value: float = 1.0,
         lora_name: str | None = None,
+        seed: int | None = None,
     ) -> None:
+        if seed is not None:
+            import torch
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            
         if prompt_latents is None:
             if len(prompt_text) > 0:
                 raise ValueError("Prompt text is not allowed when prompt latents are not provided")
@@ -497,6 +503,7 @@ class AsyncVoxCPMServer:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         lora_name: str | None = None,
+        seed: int | None = None, 
     ) -> AsyncGenerator[Waveform, None]:
         seq_id = gen_uuid()
         self.stream_table[seq_id] = asyncio.Queue()
@@ -513,6 +520,7 @@ class AsyncVoxCPMServer:
                 temperature,
                 cfg_value,
                 lora_name,
+                seed,
             )
 
             while True:
@@ -642,6 +650,7 @@ class AsyncVoxCPMServerPool:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         """Generate audio conditioned on text and optional prompt.
 
@@ -664,7 +673,7 @@ class AsyncVoxCPMServerPool:
             max_generate_length: Maximum number of generated steps.
             temperature: Sampling temperature.
             cfg_value: Classifier-free guidance scale.
-
+            seed: Optional random seed for reproducibility. If set, this will fix the
         Yields:
             Waveform chunks as ``np.ndarray`` of dtype ``float32``.
 
@@ -702,6 +711,7 @@ class AsyncVoxCPMServerPool:
                 temperature,
                 cfg_value,
                 lora_name,
+                seed
             ):
                 yield data
         finally:
@@ -784,6 +794,7 @@ class SyncVoxCPMServerPool:
         temperature: float = 1.0,
         cfg_value: float = 2.0,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         """Generate audio conditioned on text and optional prompt.
 
@@ -800,7 +811,8 @@ class SyncVoxCPMServerPool:
             max_generate_length: Maximum number of generated steps.
             temperature: Sampling temperature.
             cfg_value: Classifier-free guidance scale.
-
+            seed: Optional random seed for reproducibility. If set, this will fix the
+                generation output for identical inputs.
         Yields:
             Waveform chunks as ``np.ndarray`` of dtype ``float32``.
 
@@ -817,6 +829,7 @@ class SyncVoxCPMServerPool:
             temperature,
             cfg_value,
             lora_name,
+            seed
         )
         try:
             while True:
