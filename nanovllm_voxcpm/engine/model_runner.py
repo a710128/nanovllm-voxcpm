@@ -199,9 +199,9 @@ class BaseModelRunner:
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
         if sys.platform == "win32":
-            import torch._dynamo
-            torch._dynamo.config.disable = True
-            self.enforce_eager = True  
+            import torch._dynamo as dynamo_mod
+            dynamo_mod.config.disable = True
+            self.enforce_eager = True 
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
