@@ -12,15 +12,16 @@ description = "VoxCPM inference engine based on Nano-vLLM"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch>=2.5.0,!=2.6.*",
-    "triton>=3.0.0",
+    "triton>=3.0.0; sys_platform != 'win32'",
+    "triton-windows<3.5; sys_platform == 'win32'",
     "transformers>=4.51.0",
     "xxhash",
     "torchaudio",
     "tqdm",
     "numpy",
     "librosa",
-    "pydantic",
-    "flash-attn",
+    "pydantic",    
+    "flash_attn ; sys_platform != 'win32'",
     "soundfile>=0.13.1",
     "torchcodec",
 ]

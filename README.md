@@ -29,9 +29,14 @@ Note: the optional FastAPI demo service (`deployment/`) is not published on PyPI
 
 ### Prerequisites
 
-- Linux + NVIDIA GPU (CUDA)
+- Linux / Windows + NVIDIA GPU (CUDA)
 - Python >= 3.10
 - `flash-attn` is required (the package imports it at runtime)
+
+> ⚠️ **Important Note for Windows Users:** 
+> Automated installation and compilation of `flash-attn` is bypassed on Windows during package setup to prevent build isolation failures. 
+> Windows users **must manually install or compile** `flash-attn` in their active Python environment before running the engine. 
+> You can download precompiled community wheels matching your Python/PyTorch/CUDA version, or compile it locally using MSVC and CUDA Toolkit.
 
 The runtime is GPU-centric (Triton + FlashAttention). CPU-only execution is not supported.
 

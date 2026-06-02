@@ -73,6 +73,7 @@ Concrete example: VoxCPM
 """
 
 import os
+import sys
 import pickle
 import tempfile
 import torch
@@ -197,6 +198,10 @@ class BaseModelRunner:
         self._config = config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
+        if sys.platform == "win32":
+            import torch._dynamo
+            torch._dynamo.config.disable = True
+            self.enforce_eager = True  
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
@@ -213,13 +218,36 @@ class BaseModelRunner:
         # walk across the entire model graph.
         self._lora_slot_modules: dict[int, list[str]] = {}
 
-        dist.init_process_group(
-            "nccl",
-            "tcp://localhost:{}".format(distributed_port),
-            world_size=self.world_size,
-            rank=rank,
-        )
-        torch.cuda.set_device(device_idx)
+        dist_backend = "gloo" if sys.platform == "win32" else "nccl"
+
+        if self.world_size > 1:
+            if sys.platform == "win32":
+                if "GLOO_SOCKET_IFNAME" in os.environ:
+                    del os.environ["GLOO_SOCKET_IFNAME"]
+                if "TP_SOCKET_IFNAME" in os.environ:
+                    del os.environ["TP_SOCKET_IFNAME"]
+
+                os.environ["MASTER_ADDR"] = "127.0.0.1"
+                os.environ["MASTER_PORT"] = str(distributed_port)
+                dist_backend = "gloo"
+                init_method = f"tcp://127.0.0.1:{distributed_port}"
+            else:
+                dist_backend = "nccl"
+                init_method = f"tcp://localhost:{distributed_port}"
+
+            dist.init_process_group(
+                dist_backend,
+                init_method,
+                world_size=self.world_size,
+                rank=rank,
+            )
+        else:
+            if not dist.is_initialized():
+                dist.is_initialized = lambda *args, **kwargs: True
+                dist.get_rank = lambda *args, **kwargs: 0
+                dist.get_world_size = lambda *args, **kwargs: 1
+
+        torch.cuda.set_device(device_idx)   
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(self.dtype)
         torch.set_default_device("cuda")
@@ -484,6 +512,17 @@ class BaseModelRunner:
         available_physical = free + (reserved - current) - (peak - current)
         available_for_kv = min(available_budget, available_physical)
         self._config.num_kvcache_blocks = int(available_for_kv) // total_attention_block_size
+        #patch windows
+        if self._config.num_kvcache_blocks <= 0:
+            import sys
+            print(
+                f"\n[VoxCPM-Warning] KV cache calculated as <= 0 ({self._config.num_kvcache_blocks}) "
+                f"due to a temporary compilation peak or Windows VRAM limit. Forcing a minimum of 128 blocks.",
+                file=sys.stderr,
+                flush=True
+            )
+            self._config.num_kvcache_blocks = 128
+            
         assert self._config.num_kvcache_blocks > 0
 
         for module in self.model.modules():
@@ -507,10 +546,10 @@ class BaseModelRunner:
             dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
+            dist.destroy_process_group()
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
-        dist.destroy_process_group()
 
     def loop(self):
         while True:
