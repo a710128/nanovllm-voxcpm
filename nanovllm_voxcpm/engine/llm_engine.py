@@ -72,10 +72,11 @@ import torch
 
 def get_distributed_port():
     # find a free port
+    import sys
+    bind_host = "127.0.0.1" if sys.platform == "win32" else "localhost"
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("localhost", 0))
-        return s.getsockname()[1]
-
+        s.bind((bind_host, 0))
+    return s.getsockname()[1]
 
 class LLMEngineBase:
     model_runner: BaseModelRunner

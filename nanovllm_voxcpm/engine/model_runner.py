@@ -218,32 +218,23 @@ class BaseModelRunner:
         # walk across the entire model graph.
         self._lora_slot_modules: dict[int, list[str]] = {}
 
-        dist_backend = "gloo" if sys.platform == "win32" else "nccl"
-
+        
         if self.world_size > 1:
             if sys.platform == "win32":
-                if "GLOO_SOCKET_IFNAME" in os.environ:
-                    del os.environ["GLOO_SOCKET_IFNAME"]
-                if "TP_SOCKET_IFNAME" in os.environ:
-                    del os.environ["TP_SOCKET_IFNAME"]
-
-                os.environ["MASTER_ADDR"] = "127.0.0.1"
-                os.environ["MASTER_PORT"] = str(distributed_port)
-                dist_backend = "gloo"
-                init_method = f"tcp://127.0.0.1:{distributed_port}"
+                raise NotImplementedError(
+                    "Tensor parallelism (world_size > 1) is currently not supported on Windows "
+                    "because NCCL is unavailable and Gloo lacks direct CUDA tensor collectives support. "
+                    "Please run with a single GPU on Windows or use a Linux environment."
+                )
             else:
-                dist_backend = "nccl"
-                init_method = f"tcp://localhost:{distributed_port}"
-
-            dist.init_process_group(
-                dist_backend,
-                init_method,
-                world_size=self.world_size,
-                rank=rank,
-            )
+                dist.init_process_group(
+                    "nccl",
+                    f"tcp://localhost:{distributed_port}",
+                    world_size=self.world_size,
+                    rank=rank,
+                )
         else:
             if not dist.is_initialized():
-                dist.is_initialized = lambda *args, **kwargs: True
                 dist.get_rank = lambda *args, **kwargs: 0
                 dist.get_world_size = lambda *args, **kwargs: 1
 
@@ -512,16 +503,41 @@ class BaseModelRunner:
         available_physical = free + (reserved - current) - (peak - current)
         available_for_kv = min(available_budget, available_physical)
         self._config.num_kvcache_blocks = int(available_for_kv) // total_attention_block_size
-        #patch windows
-        if self._config.num_kvcache_blocks <= 0:
-            import sys
-            print(
-                f"\n[VoxCPM-Warning] KV cache calculated as <= 0 ({self._config.num_kvcache_blocks}) "
-                f"due to a temporary compilation peak or Windows VRAM limit. Forcing a minimum of 128 blocks.",
-                file=sys.stderr,
-                flush=True
-            )
-            self._config.num_kvcache_blocks = 128
+                
+        # --- ADAPTIVE KV CACHE ALLOCATION BLOCK (PRO-GRADE MULTI-PLATFORM DESIGN) ---
+        #
+        # Why this block exists:
+        # On high-VRAM GPUs (on Windows, or standard Linux/Modal cloud instances),
+        # 'num_kvcache_blocks' naturally evaluates to a positive number (e.g. 500+). 
+        # The engine will completely skip this fallback block and use the full, highly-optimized 
+        # dynamic cache pool, enabling full multi-request concurrent batching.
+        #
+        # This fallback is only triggered if the calculated budget evaluates to <= 0.
+        # On low-VRAM Windows GPUs (e.g. <= 8GB), the WDDM display driver overhead 
+        # consumes 1.5GB+ of VRAM, pushing the available budget to negative values.
+        #
+        # - For Windows users with low VRAM: we gracefully fall back to a minimal, safe 
+        #   128-block budget (approx. 2048 tokens total context) to let the local sandbox run.
+        # - For Windows users with high VRAM: this block is skipped, utilizing full capacity.
+        # - For Linux / Production SaaS deployments: we strictly enforce the memory budget 
+        #   and abort with a detailed RuntimeError to prevent unpredictable runtime CUDA OOMs.
+        if self._config.num_kvcache_blocks <= 0:            
+            if sys.platform == "win32":
+                self._config.num_kvcache_blocks = 128
+                print(
+                    f"\n[VoxCPM-Warning] KV Cache budget was evaluated as <= 0 ({self._config.num_kvcache_blocks}) "
+                    f"due to Windows WDDM VRAM overhead. Bypassing for local Windows sandbox, forcing 128 blocks.",
+                    file=sys.stderr,
+                    flush=True
+                )
+            else:
+                raise RuntimeError(
+                    f"KV cache calculation resulted in {self._config.num_kvcache_blocks} blocks. "
+                    "There is no safe memory budget to allocate KV cache. "
+                    "This typically happens if the model exceeds available VRAM. "
+                    "Please lower the model footprint by decreasing 'max_model_len', 'max_num_batched_tokens', "
+                    "'max_num_seqs', or adjusting 'gpu_memory_utilization'."
+                )
             
         assert self._config.num_kvcache_blocks > 0
 

@@ -34,9 +34,11 @@ Note: the optional FastAPI demo service (`deployment/`) is not published on PyPI
 - `flash-attn` is required (the package imports it at runtime)
 
 > ⚠️ **Important Note for Windows Users:** 
-> Automated installation and compilation of `flash-attn` is bypassed on Windows during package setup to prevent build isolation failures. 
-> Windows users **must manually install or compile** `flash-attn` in their active Python environment before running the engine. 
-> You can download precompiled community wheels matching your Python/PyTorch/CUDA version, or compile it locally using MSVC and CUDA Toolkit.
+> Automated installation and compilation of `flash-attn` is bypassed on Windows during the package setup phase to prevent build isolation and compiler errors. 
+> 
+> **Please note that a standard `pip install nano-vllm-voxcpm` on Windows is NOT enough by itself to run the engine.** The package will fail immediately at runtime with a `ModuleNotFoundError` unless you install `flash-attn` separately in your active Python environment.
+> 
+> To resolve this, you must manually install a precompiled community wheel (highly recommended to avoid local MSVC/NVCC compilation headaches) matching your exact Python/PyTorch/CUDA version, or compile it locally from source.
 
 The runtime is GPU-centric (Triton + FlashAttention). CPU-only execution is not supported.
 
@@ -54,7 +56,7 @@ Dev deps (tests):
 uv sync --frozen --dev
 ```
 
-Note: `flash-attn` may require additional system CUDA tooling depending on your environment.
+Note: compiling `flash-attn` from source on Linux may require the native NVIDIA CUDA Toolkit (with `nvcc` and CUDA headers) to be present in your system PATH.
 
 ## Basic Usage
 
