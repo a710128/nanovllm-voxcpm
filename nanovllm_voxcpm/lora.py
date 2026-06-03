@@ -120,10 +120,10 @@ class _UnavailableBackend:
 
 class _VendoredTritonPunicaBackend:
     def __init__(self) -> None:
-        # Per-call grouping of shrink/expand slices depends only on weight
-        # shapes, which are fixed once modules are constructed. Cache by
-        # ``(id(lora_a_slices[0]), id(lora_a_slices[1]), ...)`` so each LoRA
-        # layer pays the Python grouping cost exactly once.
+        # Per-call grouping of shrink/expand slices depends only on slice
+        # order, shape/layout, and which outputs are non-empty. Cache the
+        # derived plan so each LoRA layer shape pays the Python grouping cost
+        # exactly once without depending on temporary view object identities.
         self._add_lora_plan_cache: dict[tuple, _AddLoraPlan] = {}
 
     def _ops(self):
@@ -198,13 +198,14 @@ class _VendoredTritonPunicaBackend:
         lora_a_slices: list[torch.Tensor],
         lora_b_slices: list[torch.Tensor],
     ) -> _AddLoraPlan:
-        # Key by tensor identity — parameters are never reassigned on a module
-        # once constructed, so this is stable across steps. We include the
-        # empty-vs-nonempty mask of y_slices because TP shards with no output
-        # rows get filtered out.
+        # Key by shape/layout, not Python object identity. QKV/Merged LoRA
+        # layers pass fresh temporary views such as ``self.lora_A[idx]`` on
+        # every forward; keying by ``id(view)`` makes this cache grow across
+        # long-running inference. The plan only depends on slice order,
+        # shrink/expand shapes, and which output slices are non-empty.
         key = (
-            tuple(id(t) for t in lora_a_slices)
-            + tuple(id(t) for t in lora_b_slices)
+            tuple((t.size(-2), t.size(-1), t.stride(-2), t.stride(-1)) for t in lora_a_slices)
+            + tuple((t.size(-1), t.size(1), t.stride(-1), t.stride(1)) for t in lora_b_slices)
             + tuple(y.numel() > 0 for y in y_slices)
         )
         cached = self._add_lora_plan_cache.get(key)
