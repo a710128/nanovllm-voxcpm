@@ -23,6 +23,7 @@ class VoxCPM2SeqPayload:
     cfg_value: float
     decode_pad: np.ndarray | None = None
     max_generate_length: int | None = None
+    seed: int | None = None
 
 
 class VoxCPM2Engine(LLMEngineBase):
@@ -61,6 +62,7 @@ class VoxCPM2Engine(LLMEngineBase):
                     temperature=seq.custom_payload.temperature,
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
+                    seed=seq.custom_payload.seed,
                 ),
                 adapter_id=seq.adapter_id,
             )
@@ -77,6 +79,7 @@ class VoxCPM2Engine(LLMEngineBase):
                 temperature=seq.custom_payload.temperature,
                 cfg_value=seq.custom_payload.cfg_value,
                 padding_decode=seq.custom_payload.decode_pad,
+                seed=seq.custom_payload.seed,
             ),
             adapter_id=seq.adapter_id,
         )
@@ -119,6 +122,7 @@ class VoxCPM2Engine(LLMEngineBase):
         temperature: float = 1.0,
         cfg_value: float = 1.0,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         if max_generate_length < 1:
             raise ValueError(f"max_generate_length must be >= 1, got {max_generate_length}")
@@ -189,6 +193,7 @@ class VoxCPM2Engine(LLMEngineBase):
                 cfg_value=cfg_value,
                 max_generate_length=max_generate_length,
                 generated_waveforms=[],
+                seed=seed,
             ),
             lora_name=lora_name,
             adapter_id=adapter_id,

@@ -127,11 +127,7 @@ class VoxCPMServerImpl:
         lora_name: str | None = None,
         seed: int | None = None,
     ) -> None:
-        if seed is not None:
-            import torch
-            torch.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
-            
+                    
         if prompt_latents is None:
             if len(prompt_text) > 0:
                 raise ValueError("Prompt text is not allowed when prompt latents are not provided")
@@ -143,6 +139,7 @@ class VoxCPMServerImpl:
                 temperature=temperature,
                 cfg_value=cfg_value,
                 lora_name=lora_name,
+                seed=seed,
             )
             return
 
@@ -164,6 +161,7 @@ class VoxCPMServerImpl:
             temperature=temperature,
             cfg_value=cfg_value,
             lora_name=lora_name,
+            seed=seed,
         )
 
     def register_lora(self, name: str, path: str) -> RegisterLoRAResponse:
