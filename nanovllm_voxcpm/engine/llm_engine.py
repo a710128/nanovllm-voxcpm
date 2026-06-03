@@ -79,7 +79,7 @@ def get_distributed_port():
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("localhost", 0))
-        return s.getsockname()[1]
+            return s.getsockname()[1]
 
 class LLMEngineBase:
     model_runner: BaseModelRunner
