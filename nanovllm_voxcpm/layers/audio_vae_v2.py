@@ -45,7 +45,7 @@ def WNCausalTransposeConv1d(*args, **kwargs):
     return weight_norm(CausalTransposeConv1d(*args, **kwargs))
 
 
-@torch.jit.script
+@torch.compile
 def snake(x, alpha):
     shape = x.shape
     x = x.reshape(shape[0], shape[1], -1)
