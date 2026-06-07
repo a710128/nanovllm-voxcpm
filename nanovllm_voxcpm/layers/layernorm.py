@@ -26,10 +26,10 @@ class RMSNorm(nn.Module):
         x: torch.Tensor,
         residual: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        x = x + residual
-        residual = x
-        x = F.rms_norm(x, (self.hidden_size,), self.weight, self.eps)
-        return x, residual
+        orig_dtype = x.dtype
+        x = x.float() + residual.float()
+        residual = x.to(orig_dtype)
+        return F.rms_norm(x, (self.hidden_size,), self.weight.float(), self.eps).to(orig_dtype), residual
 
     def forward(
         self,
