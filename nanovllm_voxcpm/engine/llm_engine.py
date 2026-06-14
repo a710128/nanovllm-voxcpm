@@ -72,15 +72,10 @@ import torch
 
 
 def get_distributed_port():
-    # find a free port    
-    import sys    
-    if sys.platform == "win32":        
-        return 54321
-    else:
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("localhost", 0))
-            return s.getsockname()[1]
+    # find a free port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("localhost", 0))
+        return s.getsockname()[1]
 
 class LLMEngineBase:
     model_runner: BaseModelRunner
@@ -99,7 +94,7 @@ class LLMEngineBase:
                 "Please run with a single GPU on Windows or use a Linux environment."
             )
 
-        self.distributed_port = get_distributed_port()
+        self.distributed_port = get_distributed_port() if tensor_parallel_size > 1 else None
 
         if config.devices is None or len(config.devices) == 0:
             n_devices = torch.cuda.device_count()

@@ -36,7 +36,7 @@ class VoxCPMRunner(BaseModelRunner):
         config: Config[VoxCPMConfig],
         rank: int,
         device_idx: int,
-        distributed_port: int,
+        distributed_port: int | None,
         event: Event | list[Event],
     ):
         self.inference_timesteps = config.model_config.inference_timesteps

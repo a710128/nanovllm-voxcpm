@@ -104,8 +104,14 @@ def test_engine_step_finishes_sequence_and_supports_cancel(monkeypatch, tmp_path
 
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
     monkeypatch.setattr(llm_engine.torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(
+        llm_engine,
+        "get_distributed_port",
+        lambda: (_ for _ in ()).throw(AssertionError("single-GPU should not request a distributed port")),
+    )
 
     engine = EngineUnderTest(_DummyRunner, _make_config(tmp_path, devices=None), tensor_parallel_size=1)
+    assert engine.distributed_port is None
 
     cancelled = Sequence("cancelled", [10, 11], 256)
     engine.add_sequence(cancelled)
@@ -281,12 +287,16 @@ def test_engine_exit_joins_spawned_processes(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
     monkeypatch.setattr(llm_engine.sys, "platform", "linux")
     monkeypatch.setattr(llm_engine.mp, "get_context", lambda method: FakeContext())
+    monkeypatch.setattr(llm_engine, "get_distributed_port", lambda: 12345)
 
     engine = EngineUnderTest(_DummyRunner, _make_config(tmp_path, devices=[0, 1]), tensor_parallel_size=2)
     engine.exit()
 
     assert len(events) == 1
     assert len(processes) == 1
+    assert engine.distributed_port == 12345
+    assert _DummyRunner.instances[0].distributed_port == 12345
+    assert processes[0].args[3] == 12345
     assert processes[0].started is True
     assert processes[0].joined is True
     assert _DummyRunner.instances[0].calls[-1][0] == "exit"

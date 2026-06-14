@@ -203,7 +203,7 @@ class BaseModelRunner:
         config: Config,
         rank: int,
         device_idx: int,
-        distributed_port: int,
+        distributed_port: int | None,
         event: Event | list[Event],
     ):
         self._config = config
@@ -229,8 +229,8 @@ class BaseModelRunner:
         # walk across the entire model graph.
         self._lora_slot_modules: dict[int, list[str]] = {}
 
-        
         if self.world_size > 1:
+            assert distributed_port is not None
             if sys.platform == "win32":
                 raise NotImplementedError(
                     "Tensor parallelism (world_size > 1) is currently not supported on Windows "
