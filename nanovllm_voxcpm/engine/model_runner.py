@@ -117,6 +117,17 @@ def select_lora_payload_for_rank(payload, rank: int):
 
 
 _RPC_FILE_SENTINEL = "__rpc_file__"
+_NUM_KVCACHE_BLOCKS_ENV = "NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS"
+
+
+def _env_int(name: str) -> int | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw_value!r}") from exc
 
 
 class RunnerTask(Generic[PlayloadType]):
@@ -487,11 +498,6 @@ class BaseModelRunner:
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
-        free, total = torch.cuda.mem_get_info()
-        peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
-        current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        reserved = torch.cuda.memory_reserved()
-
         total_attention_block_size = 0
         for module in self.model.modules():
             if isinstance(module, Attention) and module.is_causal:
@@ -499,46 +505,42 @@ class BaseModelRunner:
                     2 * self.block_size * module.num_kv_heads * module.head_dim * self.dtype.itemsize
                 )
 
-        available_budget = total * self._config.gpu_memory_utilization - peak
-        available_physical = free + (reserved - current) - (peak - current)
-        available_for_kv = min(available_budget, available_physical)
-        self._config.num_kvcache_blocks = int(available_for_kv) // total_attention_block_size
-                
-        # --- ADAPTIVE KV CACHE ALLOCATION BLOCK (PRO-GRADE MULTI-PLATFORM DESIGN) ---
-        #
-        # Why this block exists:
-        # On high-VRAM GPUs (on Windows, or standard Linux/Modal cloud instances),
-        # 'num_kvcache_blocks' naturally evaluates to a positive number (e.g. 500+). 
-        # The engine will completely skip this fallback block and use the full, highly-optimized 
-        # dynamic cache pool, enabling full multi-request concurrent batching.
-        #
-        # This fallback is only triggered if the calculated budget evaluates to <= 0.
-        # On low-VRAM Windows GPUs (e.g. <= 8GB), the WDDM display driver overhead 
-        # consumes 1.5GB+ of VRAM, pushing the available budget to negative values.
-        #
-        # - For Windows users with low VRAM: we gracefully fall back to a minimal, safe 
-        #   128-block budget (approx. 2048 tokens total context) to let the local sandbox run.
-        # - For Windows users with high VRAM: this block is skipped, utilizing full capacity.
-        # - For Linux / Production SaaS deployments: we strictly enforce the memory budget 
-        #   and abort with a detailed RuntimeError to prevent unpredictable runtime CUDA OOMs.
-        if self._config.num_kvcache_blocks <= 0:            
-            if sys.platform == "win32":
-                self._config.num_kvcache_blocks = 128
-                print(
-                    f"\n[VoxCPM-Warning] KV Cache budget was evaluated as <= 0 ({self._config.num_kvcache_blocks}) "
-                    f"due to Windows WDDM VRAM overhead. Bypassing for local Windows sandbox, forcing 128 blocks.",
-                    file=sys.stderr,
-                    flush=True
-                )
-            else:
+        # Manual overrides are explicit escape hatches. Otherwise, auto sizing
+        # remains fail-fast when the measured memory budget cannot safely hold
+        # any KV-cache blocks.
+        env_num_blocks = _env_int(_NUM_KVCACHE_BLOCKS_ENV)
+        if env_num_blocks is not None:
+            if env_num_blocks <= 0:
+                raise ValueError(f"{_NUM_KVCACHE_BLOCKS_ENV} must be greater than 0")
+            self._config.num_kvcache_blocks = env_num_blocks
+            allocated_mb = (self._config.num_kvcache_blocks * total_attention_block_size) / (1024**2)
+            print(
+                f"\n[VoxCPM-Warning] Using manual KV cache override from {_NUM_KVCACHE_BLOCKS_ENV}: "
+                f"{self._config.num_kvcache_blocks} blocks ({allocated_mb:.2f} MB). "
+                "This bypasses automatic memory sizing and may cause CUDA OOM.",
+                file=sys.stderr,
+                flush=True,
+            )
+        elif self._config.num_kvcache_blocks <= 0:
+            free, total = torch.cuda.mem_get_info()
+            peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
+            current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+            reserved = torch.cuda.memory_reserved()
+
+            available_budget = total * self._config.gpu_memory_utilization - peak
+            available_physical = free + (reserved - current) - (peak - current)
+            available_for_kv = min(available_budget, available_physical)
+            self._config.num_kvcache_blocks = int(available_for_kv) // total_attention_block_size
+
+            if self._config.num_kvcache_blocks <= 0:
                 raise RuntimeError(
                     f"KV cache calculation resulted in {self._config.num_kvcache_blocks} blocks. "
                     "There is no safe memory budget to allocate KV cache. "
-                    "This typically happens if the model exceeds available VRAM. "
-                    "Please lower the model footprint by decreasing 'max_model_len', 'max_num_batched_tokens', "
-                    "'max_num_seqs', or adjusting 'gpu_memory_utilization'."
+                    "Please lower 'max_model_len', 'max_num_batched_tokens', 'max_num_seqs', or "
+                    "'gpu_memory_utilization'. Advanced users may set "
+                    f"{_NUM_KVCACHE_BLOCKS_ENV} to bypass automatic KV cache sizing."
                 )
-            
+
         assert self._config.num_kvcache_blocks > 0
 
         for module in self.model.modules():
