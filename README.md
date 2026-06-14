@@ -42,6 +42,15 @@ Note: the optional FastAPI demo service (`deployment/`) is not published on PyPI
 
 The runtime is GPU-centric (Triton + FlashAttention). CPU-only execution is not supported.
 
+Windows support notes:
+
+- Tensor parallelism (`tensor_parallel_size > 1`) is not supported on Windows. This path requires CUDA
+  tensor collectives through NCCL, which is not available on Windows; use single-GPU workers on Windows
+  or a Linux environment for tensor parallelism.
+- Advanced users can manually override automatic KV-cache sizing with `NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS`.
+  Leave it unset for the normal safe memory calculation. Setting it bypasses that calculation and may cause
+  CUDA OOM if the value is too high for the GPU.
+
 ### Install from source (dev)
 
 This repo uses `uv` and includes a lockfile (`uv.lock`).
