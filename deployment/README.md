@@ -54,7 +54,7 @@ Environment variables:
   - `NANOVLLM_SERVERPOOL_GPU_MEMORY_UTILIZATION` (float, default `0.95`, allowed `(0, 1]`)
   - `NANOVLLM_SERVERPOOL_ENFORCE_EAGER` (bool, default `false`; accepts `1/0,true/false,yes/no,on/off`)
   - `NANOVLLM_SERVERPOOL_DEVICES` (comma-separated ints, default `0`; e.g. `0,1`)
-  - `NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS` (advanced int override, optional; read by the core runtime to
+  - `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` (advanced int override, optional; read by the core runtime to
     bypass automatic KV-cache sizing and may cause CUDA OOM if set too high)
 
 Windows runtime note:

@@ -117,7 +117,7 @@ def select_lora_payload_for_rank(payload, rank: int):
 
 
 _RPC_FILE_SENTINEL = "__rpc_file__"
-_NUM_KVCACHE_BLOCKS_ENV = "NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS"
+_NUM_KVCACHE_BLOCKS_ENV = "NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS"
 
 
 def _env_int(name: str) -> int | None:

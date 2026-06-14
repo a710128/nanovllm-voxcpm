@@ -34,10 +34,10 @@ Key flags:
 
 Advanced KV-cache tuning:
 
-- `NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS` manually overrides automatic KV-cache sizing for in-process
+- `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` manually overrides automatic KV-cache sizing for in-process
   benchmark runs. Leave it unset for the normal safe memory calculation.
 - On low-VRAM Windows development machines, this can be useful when you have validated a smaller block
-  count locally. For example, in PowerShell: `$env:NANOVLLM_VOXCPM_NUM_KVCACHE_BLOCKS = "64"`.
+  count locally. For example, in PowerShell: `$env:NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS = "64"`.
 - Tensor parallelism is not supported on Windows; `--devices 0,1` requires both CUDA device ordinals to
   exist and does not make a single-GPU machine emulate tensor parallelism.
 
