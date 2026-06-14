@@ -635,8 +635,8 @@ def _make_tp2_qkv_layer(rank: int):
     from nanovllm_voxcpm.layers.lora import LoRAQKVParallelLinear
     import nanovllm_voxcpm.layers.lora as lora_layers
 
-    lora_layers.dist.get_world_size = lambda: 2
-    lora_layers.dist.get_rank = lambda: rank
+    lora_layers._get_world_size = lambda: 2
+    lora_layers._get_rank = lambda: rank
     layer = LoRAQKVParallelLinear(
         hidden_size=2,
         head_size=1,

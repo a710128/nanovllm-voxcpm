@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from nanovllm_voxcpm.lora import LoRAMetadata, get_backend
 from nanovllm_voxcpm.utils.context import LM_LORA_DOMAIN, get_lora_context
+from nanovllm_voxcpm.utils.distributed import get_tp_rank, get_tp_world_size
 from nanovllm_voxcpm.utils.torch_param import set_weight_loader
 
 ShardId = str | int
@@ -21,21 +22,11 @@ def divide(numerator, denominator):
 
 
 def _get_world_size() -> int:
-    if not dist.is_available():
-        return 1
-    try:
-        return dist.get_world_size()
-    except Exception:
-        return 1
+    return get_tp_world_size()
 
 
 def _get_rank() -> int:
-    if not dist.is_available():
-        return 0
-    try:
-        return dist.get_rank()
-    except Exception:
-        return 0
+    return get_tp_rank()
 
 
 def _flatten_tokens(x: torch.Tensor) -> tuple[torch.Tensor, tuple[int, ...]]:

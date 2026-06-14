@@ -244,11 +244,6 @@ class BaseModelRunner:
                     world_size=self.world_size,
                     rank=rank,
                 )
-        else:
-            if not dist.is_initialized():
-                dist.get_rank = lambda *args, **kwargs: 0
-                dist.get_world_size = lambda *args, **kwargs: 1
-
         torch.cuda.set_device(device_idx)   
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(self.dtype)

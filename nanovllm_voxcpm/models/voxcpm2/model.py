@@ -2,7 +2,6 @@ import math
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 from torch import nn
 
 from nanovllm_voxcpm.layers.activation import SiluAndMul
@@ -23,6 +22,7 @@ from nanovllm_voxcpm.utils.context import (
     PROJ_LORA_DOMAIN,
     get_context,
 )
+from nanovllm_voxcpm.utils.distributed import get_tp_world_size
 
 
 class MiniCPMLongRoPE(nn.Module):
@@ -118,7 +118,7 @@ class Cpm4Attention(nn.Module):
         lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
-        tp_size = dist.get_world_size()
+        tp_size = get_tp_world_size()
         self.total_num_heads = num_heads
         self.total_num_kv_heads = num_kv_heads
         self.num_heads = self.total_num_heads // tp_size
