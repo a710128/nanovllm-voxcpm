@@ -61,3 +61,47 @@ def test_add_request_resolves_lora_name_into_adapter_id():
     e.add_request(seq_id="s", target_text="x", max_generate_length=6, lora_name="demo")
     assert e._captured_seq.lora_name == "demo"
     assert e._captured_seq.adapter_id == 7
+
+
+def test_postprocess_advances_seed_step_after_generated_latent():
+    import numpy as np
+
+    from nanovllm_voxcpm.models.voxcpm.engine import VoxCPMEngine, VoxCPMSeqPayload
+
+    engine = VoxCPMEngine.__new__(VoxCPMEngine)
+    engine.feat_dim = 2
+    engine.patch_size = 4
+    engine.n_decode_pad_frames = 4
+
+    class _Seq:
+        stoped = False
+
+        def __init__(self):
+            self.tokens = []
+            self.custom_payload = VoxCPMSeqPayload(
+                feats=[],
+                text_tokens=[],
+                feat_masks=[],
+                generated_waveforms=[],
+                temperature=1.0,
+                cfg_value=1.0,
+                max_generate_length=10,
+                seed=123,
+                seed_step=2,
+            )
+
+        def append_token(self, token):
+            self.tokens.append(token)
+
+    seq = _Seq()
+    engine.postprocess_seq(
+        seq,
+        {
+            "latents": np.zeros((engine.patch_size, engine.feat_dim), dtype=np.float32),
+            "waveforms": np.zeros(8, dtype=np.float32),
+            "stop_flag": 0,
+        },
+        is_prefill=False,
+    )
+
+    assert seq.custom_payload.seed_step == 3
