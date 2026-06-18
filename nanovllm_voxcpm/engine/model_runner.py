@@ -211,8 +211,9 @@ class BaseModelRunner:
         self.enforce_eager = config.enforce_eager
         if sys.platform == "win32":
             import torch._dynamo as dynamo_mod
+
             dynamo_mod.config.disable = True
-            self.enforce_eager = True 
+            self.enforce_eager = True
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
@@ -244,7 +245,7 @@ class BaseModelRunner:
                     world_size=self.world_size,
                     rank=rank,
                 )
-        torch.cuda.set_device(device_idx)   
+        torch.cuda.set_device(device_idx)
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(self.dtype)
         torch.set_default_device("cuda")
