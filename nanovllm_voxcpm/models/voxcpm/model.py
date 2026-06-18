@@ -655,14 +655,14 @@ class UnifiedCFM(torch.nn.Module):
         """
         b, c = mu.shape
         t = self.patch_size
-       
+
         if z_noise is not None:
             z = z_noise
         else:
             z = torch.randn((b, self.in_channels, t), device=mu.device, dtype=mu.dtype)
 
-        z = z * temperature[:, None, None]        
-        t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)        
+        z = z * temperature[:, None, None]
+        t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
         # Sway sampling strategy
         t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
 
@@ -904,7 +904,7 @@ class VoxCPMModel(nn.Module):
         feat_mask: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
-        z_noise: torch.Tensor | None = None, 
+        z_noise: torch.Tensor | None = None,
     ):
         """
         text_tokens: [T]

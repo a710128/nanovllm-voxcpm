@@ -502,7 +502,7 @@ async def _consume_one_in_process(
         temperature=temperature,
         cfg_value=cfg_value,
         lora_name=lora_name,
-        seed=seed
+        seed=seed,
     ):
         if first_chunk_t is None:
             first_chunk_t = time.perf_counter()

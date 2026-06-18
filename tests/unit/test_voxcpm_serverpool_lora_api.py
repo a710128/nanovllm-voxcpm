@@ -26,7 +26,7 @@ class _FakeServer:
         temperature=1.0,
         cfg_value=2.0,
         lora_name=None,
-        seed=42
+        seed=42,
     ):
         self.generate_calls.append(
             {
@@ -37,7 +37,7 @@ class _FakeServer:
                 "temperature": temperature,
                 "cfg_value": cfg_value,
                 "lora_name": lora_name,
-                "seed": seed
+                "seed": seed,
             }
         )
         yield "chunk"

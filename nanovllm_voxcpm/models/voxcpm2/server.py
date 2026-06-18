@@ -126,7 +126,7 @@ class VoxCPM2ServerImpl:
         lora_name: str | None = None,
         seed: int | None = None,
     ) -> None:
-                    
+
         if prompt_latents is None:
             if len(prompt_text) > 0:
                 raise ValueError("Prompt text is not allowed when prompt latents are not provided")
@@ -437,7 +437,7 @@ class AsyncVoxCPM2Server:
         cfg_value: float = 2.0,
         ref_audio_latents: bytes | None = None,
         lora_name: str | None = None,
-        seed: int | None = None
+        seed: int | None = None,
     ) -> AsyncGenerator[Waveform, None]:
         seq_id = gen_uuid()
         self.stream_table[seq_id] = asyncio.Queue()
