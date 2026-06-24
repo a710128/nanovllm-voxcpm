@@ -167,7 +167,7 @@ Response body (JSON):
 - `sample_rate`: output sample rate (from the model)
 - `channels`: `1`
 
-### Generate (streaming MP3)
+### Generate (streaming audio)
 
 `POST /generate`
 
@@ -181,13 +181,21 @@ Request body (JSON):
 - Reference audio (optional, mutually exclusive):
   - wav reference: `ref_audio_wav_base64` + `ref_audio_wav_format`
   - latents reference: `ref_audio_latents_base64`
+- `response_format` (optional, default `"mp3"`): output encoding, one of:
+  - `"mp3"`: MP3 stream (`audio/mpeg`), encoded server-side via `lameenc`
+  - `"pcm"`: raw signed 16-bit little-endian mono PCM (`audio/L16`) at the model
+    sample rate — lossless and lower-latency (skips the MP3 encoder), no container.
+    The consumer must know sample rate / channels out-of-band (see `X-Audio-*` headers).
 
 `ref_audio_*` is independent from the prompt fields, so you can combine reference audio with either zero-shot or prompted generation.
 
 Response:
 
-- `Content-Type: audio/mpeg`
-- body is a streamed MP3 byte stream
+- `Content-Type`:
+  - `audio/mpeg` when `response_format` is `"mp3"` (default)
+  - `audio/L16;rate=<sample_rate>;channels=<channels>` when `response_format` is `"pcm"`
+- body is a streamed audio byte stream (MP3 frames, or raw s16le PCM samples)
 - headers:
   - `X-Audio-Sample-Rate`
   - `X-Audio-Channels`
+  - `X-Audio-Encoding`: `mp3` or `s16le`
