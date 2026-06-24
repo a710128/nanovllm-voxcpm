@@ -121,6 +121,30 @@ def test_load_config_validates_serverpool(monkeypatch):
         load_config()
 
 
+def test_load_config_validates_inference_timesteps(monkeypatch):
+    from app.core.config import load_config
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", "0")
+    with pytest.raises(RuntimeError, match="NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS must be > 0"):
+        load_config()
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", "-1")
+    with pytest.raises(RuntimeError, match="NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS must be > 0"):
+        load_config()
+
+
+def test_load_config_inference_timesteps_default_and_override(monkeypatch):
+    from app.core.config import load_config
+
+    monkeypatch.delenv("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", raising=False)
+    cfg = load_config()
+    assert cfg.server_pool.inference_timesteps == 10
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", "20")
+    cfg = load_config()
+    assert cfg.server_pool.inference_timesteps == 20
+
+
 def test_load_config_rejects_legacy_lora_startup_env(monkeypatch):
     from app.core.config import load_config
 

@@ -85,6 +85,7 @@ class ServerPoolStartupConfig:
     gpu_memory_utilization: float
     enforce_eager: bool
     devices: tuple[int, ...]
+    inference_timesteps: int = 10
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ def load_config() -> ServiceConfig:
     pool_gpu_memory_utilization = _get_float_env("NANOVLLM_SERVERPOOL_GPU_MEMORY_UTILIZATION", 0.95)
     pool_enforce_eager = _get_bool_env("NANOVLLM_SERVERPOOL_ENFORCE_EAGER", False)
     pool_devices = _get_int_list_env("NANOVLLM_SERVERPOOL_DEVICES", (0,))
+    pool_inference_timesteps = _get_int_env("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", 10)
 
     if pool_max_num_batched_tokens <= 0:
         raise RuntimeError("NANOVLLM_SERVERPOOL_MAX_NUM_BATCHED_TOKENS must be > 0")
@@ -188,6 +190,8 @@ def load_config() -> ServiceConfig:
         raise RuntimeError("NANOVLLM_SERVERPOOL_DEVICES must be a non-empty list")
     if any(d < 0 for d in pool_devices):
         raise RuntimeError("NANOVLLM_SERVERPOOL_DEVICES entries must be >= 0")
+    if pool_inference_timesteps <= 0:
+        raise RuntimeError("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS must be > 0")
 
     return ServiceConfig(
         model_path=model_path,
@@ -199,6 +203,7 @@ def load_config() -> ServiceConfig:
             gpu_memory_utilization=pool_gpu_memory_utilization,
             enforce_eager=pool_enforce_eager,
             devices=pool_devices,
+            inference_timesteps=pool_inference_timesteps,
         ),
         lora=runtime_lora_config,
     )
