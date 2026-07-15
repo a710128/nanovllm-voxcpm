@@ -874,7 +874,7 @@ class BaseModelRunner:
         has_active_lora = any(
             not context.no_lora_flag and context.token_to_slot is not None for context in lora_contexts.values()
         )
-        has_lora_graph = has_active_lora and bool(self.graphs.get("lora"))
+        has_lora_graph = has_active_lora and bool(getattr(self, "graphs", {}).get("lora"))
         try:
             if (
                 is_prefill
