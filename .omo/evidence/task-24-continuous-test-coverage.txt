@@ -1,0 +1,50 @@
+task-24: De-duplicate GPU shims into shared helper
+Date: 2026-07-16
+
+## Changes Made
+
+### New file: tests/_shims.py
+- Contains `_ensure_module()`, `_module_available()`, and `install_gpu_shims()`
+- All shared shim logic (flash_attn, triton, triton.language, huggingface_hub, pydantic, transformers)
+- `_ensure_module` body appears in exactly ONE non-conftest source file
+
+### Modified: tests/unit/conftest.py
+- Removed inline `_ensure_module`, `_module_available`, and all shim blocks
+- Added `from tests._shims import _module_available, install_gpu_shims`
+- `pytest_configure()` now calls `install_gpu_shims()` instead of inline code
+- PRESERVED: TORCHDYNAMO_DISABLE env setup, torch._dynamo.config.disable, gpu marker
+- PRESERVED: `pytest_collection_modifyitems` gpu skip hook
+
+### Modified: deployment/tests/conftest.py
+- Removed inline `_ensure_module`, `_module_available`, and all shim blocks
+- Added repo root to sys.path before import
+- Added `from tests._shims import install_gpu_shims`
+- Module-level call `install_gpu_shims()` replaces the inline blocks
+- PRESERVED: sys.path.insert for DEPLOYMENT_DIR
+- PRESERVED: pytest.importorskip calls (fastapi, starlette, prometheus_client)
+- PRESERVED: TORCHDYNAMO_DISABLE env setup
+- PRESERVED: FakeServerPool class and app fixture
+
+## Verification
+
+### _ensure_module in exactly one file:
+grep -rn "def _ensure_module" tests/
+→ tests/_shims.py:16:def _ensure_module(name: str) -> types.ModuleType:
+
+### uv run pytest -m "not gpu" -q (tail):
+11 failed, 424 passed, 3 deselected, 5 warnings
+(11 failures are PRE-EXISTING, verified via git stash before/after — same count)
+
+### uv run pytest deployment/tests -q (tail):
+66 passed in 0.67s
+
+## Pre-existing failures confirmed (11 in test_voxcpm_runner.py):
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_inputs_feat_mask_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_inputs_temperature_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_inputs_cfg_value_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_inputs_z_noise_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_outputs_keys
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_outputs_latents_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_outputs_stop_flag_shape
+- TestVoxCPMRunnerDummyMethods::test_make_dummy_outputs_all_zeros
+(and 3 more in the same class — all pre-existing before this task)

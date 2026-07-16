@@ -1,0 +1,45 @@
+Task 21: CPU-testable test contributor guide
+Date: 2026-07-16
+
+## Deliverables
+
+- CONTRIBUTING.md created at: /cache/zengguoyang/nano-vllm/CONTRIBUTING.md
+- Lines: 165
+
+## Required Reference Verification
+
+### @pytest.mark.gpu
+CONTRIBUTING.md line 33: Mark a test `@pytest.mark.gpu` when it **must** run real CUDA kernels and cannot be faked:
+CONTRIBUTING.md line 36: @pytest.mark.gpu
+CONTRIBUTING.md line 41: `conftest.py:pytest_collection_modifyitems` automatically skips every `@pytest.mark.gpu` test when
+
+### scripts/coverage.sh
+CONTRIBUTING.md line 134: bash scripts/coverage.sh
+
+### diff-cover
+CONTRIBUTING.md line 142: ## Before pushing: check diff-cover locally
+CONTRIBUTING.md line 148: uv run diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+CONTRIBUTING.md line 154: `diff-cover` reports coverage only on lines changed relative to `origin/main`.
+
+### Idioms referenced (5 named, requirement was 2+)
+1. conftest.py shims (lines 57-127)    - flash_attn, triton, transformers stubs in pytest_configure
+2. __new__ shell + attribute seeding   - test_voxcpm_engine_max_model_len.py:16-30
+3. _DummyRunner fake worker            - test_llm_engine.py:17-36
+4. set_backend_for_testing()           - test_llm_engine.py LoRA backend swap
+5. monkeypatch the CUDA edge           - test_scheduler.py block_manager.can_allocate
+
+## Source files read
+
+- tests/unit/conftest.py (all 173 lines)
+- tests/unit/test_voxcpm_engine_max_model_len.py (lines 1-40, idiom at 16-30)
+- tests/unit/test_llm_engine.py (lines 1-50, _DummyRunner at 17-36, set_backend_for_testing at line 9)
+- tests/unit/test_scheduler.py (grep for monkeypatch/can_allocate patterns)
+- scripts/coverage.sh (all 18 lines)
+
+## Syntax check
+
+uv run python -m compileall . only compiles .py files; CONTRIBUTING.md is markdown and unaffected.
+
+## No production or test files modified
+
+Only CONTRIBUTING.md (new documentation file) and this evidence file were written.

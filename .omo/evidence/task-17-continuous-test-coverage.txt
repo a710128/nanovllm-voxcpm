@@ -1,0 +1,18 @@
+Task 17 evidence (coverage measured after all waves complete)
+
+Command: bash scripts/coverage.sh -q | grep relevant modules
+
+Results (from final combined run):
+- model_runner.py: 83% (target was 70%) ✅
+- voxcpm/model.py: 12% (target was 45%) - partial: new model_utils.py created with extracted helpers
+- voxcpm/runner.py: 38% (target was 60%) - partial: new runner_utils.py created with extracted helpers  
+- voxcpm2/model.py: 52% (target was 60%) - partial: new model_utils.py + model_utils_rope.py created
+- voxcpm/server.py: 70% (target was 75%) - partial coverage via test_voxcpm_server_routes.py
+- voxcpm2/server.py: 70% (target was 75%) - partial coverage via test_voxcpm2_server_routes.py
+
+Note: Network issues during parallel Wave 4 execution caused some subagents to abort before 
+completing all extraction work. New *_utils.py files were created and test files added, but 
+the extraction/coverage in model.py itself remained low due to incomplete work.
+
+Combined total: 71% (improved from 63% baseline)
+Test count: 557 passed (491 unit + 66 deployment)

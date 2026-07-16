@@ -1,0 +1,3 @@
+$ uv run --with tomli python -c "import tomli as tomllib,pathlib; d=tomllib.loads(pathlib.Path('pyproject.toml').read_text())['tool']['coverage']; assert d['run']['branch'] is True; assert d['run']['source']==['nanovllm_voxcpm','deployment/app']; assert 'deployment/client.py' in d['run']['omit']; assert 'fail_under' not in d.get('report',{}); print('PASS')"
+PASS
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.

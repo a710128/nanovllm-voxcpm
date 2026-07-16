@@ -1,0 +1,7 @@
+Task 10 evidence
+
+- Updated `deployment/client.py` to mark the demo entrypoint with `# pragma: no cover`.
+- Confirmed `pyproject.toml` includes `deployment/client.py` in `[tool.coverage.run].omit`.
+- Ran `bash scripts/coverage.sh`; `deployment/client.py` does not appear in the coverage report.
+- Confirmed `deployment/tests/test_client.py` does not exist.
+- Confirmed `coverage.xml` omits `deployment/client.py`.

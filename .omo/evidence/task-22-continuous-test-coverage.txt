@@ -1,0 +1,10 @@
+Task 22: Continuous test coverage note
+
+Updated README.md near the top with a static coverage note linking to the CI workflow:
+**Coverage**: ~71% combined (core + deployment) - see [CI coverage job](.github/workflows/ci.yml) for the latest.
+
+Verification:
+`grep -n "coverage\|Coverage" README.md | head -5`
+
+Output:
+12:**Coverage**: ~71% combined (core + deployment) - see [CI coverage job](.github/workflows/ci.yml) for the latest.

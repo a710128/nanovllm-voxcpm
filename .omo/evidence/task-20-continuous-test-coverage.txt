@@ -1,0 +1,24 @@
+History investigation
+
+Command: git log --all --oneline -- tests/parity/
+Output: <no output>
+
+Command: git log --all --diff-filter=D --name-only -- 'tests/parity/*.py'
+Output: <no output>
+
+Command: git log --all --oneline --follow -- 'tests/parity/test_voxcpm_single_step_parity.py'
+Output: <no output>
+
+Command: git log --all --oneline --follow -- 'tests/parity/test_voxcpm2_module_parity.py'
+Output: <no output>
+
+Verification
+
+Command: test -f tests/parity/README.md && printf 'README present\n'; git ls-files tests/parity | grep -c pyc
+Output:
+README present
+0
+
+Result
+
+No recoverable tracked parity test sources were found in git history for this snapshot. Stale bytecode was removed and tests/parity/README.md documents the situation.

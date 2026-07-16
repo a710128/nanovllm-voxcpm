@@ -1,0 +1,20 @@
+Task: Verify CI coverage summary uses a real TOTAL from coverage output.
+
+Workflow check:
+- `.github/workflows/ci.yml` contains `Write coverage summary` with:
+  - `TOTAL=$(uv run --no-sync coverage report | grep '^TOTAL' | awk '{print $NF}')`
+  - `$GITHUB_STEP_SUMMARY` writes the parsed `TOTAL`
+- No `secrets.` references found in the workflow file (`grep -c "secrets\." .github/workflows/ci.yml` վերադարձ 0).
+
+Local simulation:
+- Generated/updated `coverage.xml` by running `bash scripts/coverage.sh`.
+- Ran `uv run --no-sync coverage report | grep '^TOTAL' | awk '{print $NF}'`.
+- Parsed result: `63%`.
+- Confirmed the parsed value matches a real percentage with `grep -E '[0-9]+%'`.
+
+YAML validation:
+- `uv run python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` exited 0.
+
+Conclusion:
+- The CI summary step is dynamic and reads the real TOTAL from coverage output.
+- No workflow edit was required.

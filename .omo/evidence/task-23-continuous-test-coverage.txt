@@ -1,0 +1,4 @@
+Verification:
+- Command: grep -c "80\|increment\|never lower\|xfail\|mutmut\|scripts/coverage.sh" docs/coverage-policy.md
+- Result: 7
+- Status: passed
