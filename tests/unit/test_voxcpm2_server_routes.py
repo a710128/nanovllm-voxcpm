@@ -642,3 +642,103 @@ async def _pool_wait_for_ready_and_stop():
 
 def test_pool_wait_for_ready_and_stop():
     asyncio.run(_pool_wait_for_ready_and_stop())
+
+
+def test_async_server_rejects_unknown_kwargs_before_starting_process():
+    from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2Server
+
+    with pytest.raises(ValueError, match="Unknown kwargs"):
+        AsyncVoxCPM2Server("/fake/model", unsupported=True)
+
+
+def test_async_server_pool_rejects_unknown_kwargs_before_starting_servers():
+    from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2ServerPool
+
+    with pytest.raises(ValueError, match="Unknown kwargs"):
+        AsyncVoxCPM2ServerPool("/fake/model", unsupported=True)
+
+
+async def _async_server_forwards_control_plane_calls():
+    from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2Server
+
+    server = object.__new__(AsyncVoxCPM2Server)
+    calls = []
+
+    async def submit(command, *args):
+        calls.append((command, args))
+        return command
+
+    server.submit = submit
+
+    assert await server.health() == "health"
+    assert await server.get_model_info() == "get_model_info"
+    assert await server.encode_latents(b"wav", "wav") == "encode_latents"
+    assert await server.register_lora("demo", "/tmp/demo") == "register_lora"
+    assert await server.unregister_lora("demo") == "unregister_lora"
+    assert await server.list_loras() == "list_loras"
+    assert [command for command, _ in calls] == [
+        "health",
+        "get_model_info",
+        "encode_latents",
+        "register_lora",
+        "unregister_lora",
+        "list_loras",
+    ]
+
+
+def test_async_server_forwards_control_plane_calls():
+    asyncio.run(_async_server_forwards_control_plane_calls())
+
+
+async def _async_server_generate_completes_and_cleans_stream_state():
+    from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2Server
+
+    server = object.__new__(AsyncVoxCPM2Server)
+    server.stream_table = {}
+    commands = []
+
+    async def submit(command, *args):
+        commands.append(command)
+        if command == "add_request":
+            stream = server.stream_table[args[0]]
+            await stream.put(np.array([1.0], dtype=np.float32))
+            await stream.put(None)
+
+    server.submit = submit
+
+    chunks = [chunk async for chunk in server.generate("hello")]
+
+    assert len(chunks) == 1
+    assert chunks[0].tolist() == [1.0]
+    assert commands == ["add_request"]
+    assert server.stream_table == {}
+
+
+def test_async_server_generate_completes_and_cleans_stream_state():
+    asyncio.run(_async_server_generate_completes_and_cleans_stream_state())
+
+
+async def _async_server_generate_cancels_when_consumer_closes_early():
+    from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2Server
+
+    server = object.__new__(AsyncVoxCPM2Server)
+    server.stream_table = {}
+    commands = []
+
+    async def submit(command, *args):
+        commands.append(command)
+        if command == "add_request":
+            await server.stream_table[args[0]].put(np.array([1.0], dtype=np.float32))
+
+    server.submit = submit
+    stream = server.generate("hello")
+
+    await stream.__anext__()
+    await stream.aclose()
+
+    assert commands == ["add_request", "cancel"]
+    assert server.stream_table == {}
+
+
+def test_async_server_generate_cancels_when_consumer_closes_early():
+    asyncio.run(_async_server_generate_cancels_when_consumer_closes_early())
