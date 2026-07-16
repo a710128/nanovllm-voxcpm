@@ -61,8 +61,33 @@ extend-exclude = '''
   | \.venv
   | build
   | dist
-)/
+  )/
 '''
+
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+source = ["nanovllm_voxcpm", "deployment/app"]
+omit = ["deployment/tests/*", "tests/*", "deployment/client.py"]
+dynamic_context = "test_function"
+
+[tool.coverage.report]
+skip_covered = true
+exclude_also = [
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.paths]
+source = [
+    "nanovllm_voxcpm/",
+    "/__w/nano-vllm/nano-vllm/nanovllm_voxcpm/",
+    "deployment/app/",
+    "/__w/nano-vllm/nano-vllm/deployment/app/",
+]
 
 [tool.ruff]
 line-length = 120
