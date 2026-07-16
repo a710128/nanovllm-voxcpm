@@ -47,6 +47,8 @@ Formatting and static checks
   Result: All checks passed.
 - uv run python -m compileall nanovllm_voxcpm deployment tests
   Result: exit code 0.
+- uv run diff-cover coverage.xml --compare-branch=origin/main --fail-under=80 with the CI include set
+  Result: exit code 0; a direct PurePath glob assertion matched model_utils.py, model_utils_cfm.py, and model_utils_rope.py.
 
 File-size ceiling
 -----------------
@@ -65,3 +67,7 @@ The requested dotted target command:
 fails before test collection in this environment. pytest-cov/coverage 7.13.5 imports the dotted source target and then unloads it; Torch 2.10 cannot be initialized a second time and raises:
   RuntimeError: function '_has_torch_function' already has a docstring
 Using the package directory as the coverage source avoids source-target import side effects and reports coverage for the same model.py file, shown above at 62%.
+
+Post-review correction
+----------------------
+The diff-cover include was widened from model_utils.py to model_utils*.py so model_utils_cfm.py, model_utils_rope.py, and future LOC-driven siblings remain covered by the CPU changed-line gate.
