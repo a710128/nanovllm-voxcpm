@@ -75,5 +75,5 @@ async def main() -> None:
         await asyncio.gather(*[generate_mp3(session, payload, out_path) for payload, out_path in jobs])
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     asyncio.run(main())

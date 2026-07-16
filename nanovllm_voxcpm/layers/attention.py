@@ -8,7 +8,7 @@ from nanovllm_voxcpm.utils.context import get_context
 
 
 @triton.jit
-def store_kvcache_kernel(
+def store_kvcache_kernel(  # pragma: no cover – GPU Triton kernel, not executable on CPU
     key_ptr,
     key_stride,
     value_ptr,
@@ -44,7 +44,7 @@ def store_kvcache(
     assert key.stride(1) == head_dim and value.stride(1) == head_dim
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == N
-    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)  # pragma: no cover – dispatches GPU Triton kernel
 
 
 class Attention(nn.Module):
@@ -65,7 +65,7 @@ class Attention(nn.Module):
         self.k_cache = self.v_cache = torch.tensor([])
         self.is_causal = is_causal
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):  # pragma: no cover – all paths call GPU flash-attn kernels
         if self.is_causal:
             context = get_context()
             k_cache, v_cache = self.k_cache, self.v_cache
