@@ -24,6 +24,26 @@ def float32_to_s16le_bytes(wav: np.ndarray) -> bytes:
     return wav_i16.tobytes(order="C")
 
 
+async def stream_pcm(
+    *,
+    request: _DisconnectableRequest,
+    wav_chunks: AsyncIterator[np.ndarray],
+) -> AsyncIterator[bytes]:
+    """Stream raw signed 16-bit little-endian mono PCM (s16le) — no container, no encode.
+
+    This is the same s16le payload stream_mp3 feeds into lameenc, emitted directly:
+    lossless and lower-latency (skips the MP3 encoder). The consumer must know the
+    sample rate / channels / dtype out-of-band (sent as X-Audio-* response headers).
+    The numpy conversion is cheap, so unlike stream_mp3 no background thread is needed.
+    """
+    async for chunk in wav_chunks:
+        if await request.is_disconnected():
+            break
+        pcm = float32_to_s16le_bytes(chunk)
+        if pcm:
+            yield pcm
+
+
 async def stream_mp3(
     *,
     request: _DisconnectableRequest,

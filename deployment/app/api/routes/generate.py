@@ -17,7 +17,7 @@ from app.core.metrics import (
     GENERATE_TTFB_SECONDS,
 )
 from app.schemas.http import ErrorResponse, GenerateRequest
-from app.services.mp3 import stream_mp3
+from app.services.mp3 import stream_mp3, stream_pcm
 
 router = APIRouter(tags=["generation"])
 
@@ -82,14 +82,17 @@ def _validate_generate_prompt(req: GenerateRequest) -> None:
 @router.post(
     "/generate",
     response_class=StreamingResponse,
-    summary="Generate audio (streaming MP3)",
+    summary="Generate audio (streaming MP3 or PCM)",
     responses={
         200: {
-            "description": "MP3 byte stream",
+            "description": "Streamed audio bytes (MP3 by default, or raw s16le PCM when response_format='pcm')",
             "content": {
                 "audio/mpeg": {
                     "schema": {"type": "string", "format": "binary"},
-                }
+                },
+                "audio/L16": {
+                    "schema": {"type": "string", "format": "binary"},
+                },
             },
             "headers": {
                 "X-Audio-Sample-Rate": {
@@ -99,6 +102,10 @@ def _validate_generate_prompt(req: GenerateRequest) -> None:
                 "X-Audio-Channels": {
                     "description": "Number of audio channels.",
                     "schema": {"type": "integer"},
+                },
+                "X-Audio-Encoding": {
+                    "description": "Audio encoding of the stream ('mp3' or 's16le').",
+                    "schema": {"type": "string"},
                 },
             },
         },
@@ -112,8 +119,10 @@ async def generate(
     request: Request,
     server: Any = Depends(get_server),
 ) -> StreamingResponse:
-    """Generate speech audio as a streamed MP3 byte stream.
+    """Generate speech audio as a streamed byte stream.
 
+    The output encoding is selected via ``response_format``: MP3 (``audio/mpeg``,
+    default) or raw signed 16-bit little-endian mono PCM (``audio/L16``).
     The response is streamed and may terminate early if the client disconnects or
     an internal error occurs after streaming has started.
     """
@@ -218,14 +227,23 @@ async def generate(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    async def body() -> AsyncIterator[bytes]:
-        nonlocal ttfb_recorded
-        async for b in stream_mp3(
+    if req.response_format == "pcm":
+        audio_stream = stream_pcm(request=request, wav_chunks=wav_chunks())
+        media_type = f"audio/L16;rate={sample_rate};channels={channels}"
+        audio_encoding = "s16le"
+    else:
+        audio_stream = stream_mp3(
             request=request,
             wav_chunks=wav_chunks(),
             sample_rate=sample_rate,
             mp3=cfg.mp3,
-        ):
+        )
+        media_type = "audio/mpeg"
+        audio_encoding = "mp3"
+
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal ttfb_recorded
+        async for b in audio_stream:
             if not ttfb_recorded:
                 GENERATE_TTFB_SECONDS.observe(time.perf_counter() - start_t)
                 ttfb_recorded = True
@@ -236,9 +254,10 @@ async def generate(
 
     return StreamingResponse(
         body(),
-        media_type="audio/mpeg",
+        media_type=media_type,
         headers={
             "X-Audio-Sample-Rate": str(sample_rate),
             "X-Audio-Channels": str(channels),
+            "X-Audio-Encoding": audio_encoding,
         },
     )

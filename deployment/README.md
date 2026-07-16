@@ -54,6 +54,7 @@ Environment variables:
   - `NANOVLLM_SERVERPOOL_GPU_MEMORY_UTILIZATION` (float, default `0.95`, allowed `(0, 1]`)
   - `NANOVLLM_SERVERPOOL_ENFORCE_EAGER` (bool, default `false`; accepts `1/0,true/false,yes/no,on/off`)
   - `NANOVLLM_SERVERPOOL_DEVICES` (comma-separated ints, default `0`; e.g. `0,1`)
+  - `NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS` (int, default `10`, allowed `> 0`) — number of CFM flow-matching ODE steps for the audio decoder. Lower is faster but coarser; higher is slower but finer.
   - `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` (advanced int override, optional; read by the core runtime to
     bypass automatic KV-cache sizing and may cause CUDA OOM if set too high)
 
@@ -173,7 +174,7 @@ Response body (JSON):
 - `sample_rate`: output sample rate (from the model)
 - `channels`: `1`
 
-### Generate (streaming MP3)
+### Generate (streaming audio)
 
 `POST /generate`
 
@@ -192,13 +193,21 @@ Request body (JSON):
   - `cfg_value`: classifier-free guidance scale (float, default: `1.5`)
   - `temperature`: sampling temperature (float, default: `1.0`)
   - `max_generate_length`: maximum number of model generation steps (int, default: `2000`)
+  - `response_format` (default `"mp3"`): output encoding, one of:
+    - `"mp3"`: MP3 stream (`audio/mpeg`), encoded server-side via `lameenc`
+    - `"pcm"`: raw signed 16-bit little-endian mono PCM (`audio/L16`) at the model
+      sample rate — lossless and lower-latency (skips the MP3 encoder), no container.
+      The consumer must know sample rate / channels out-of-band (see `X-Audio-*` headers).
 
 `ref_audio_*` is independent from the prompt fields, so you can combine reference audio with either zero-shot or prompted generation.
 
 Response:
 
-- `Content-Type: audio/mpeg`
-- body is a streamed MP3 byte stream
+- `Content-Type`:
+  - `audio/mpeg` when `response_format` is `"mp3"` (default)
+  - `audio/L16;rate=<sample_rate>;channels=<channels>` when `response_format` is `"pcm"`
+- body is a streamed audio byte stream (MP3 frames, or raw s16le PCM samples)
 - headers:
   - `X-Audio-Sample-Rate`
   - `X-Audio-Channels`
+  - `X-Audio-Encoding`: `mp3` or `s16le`

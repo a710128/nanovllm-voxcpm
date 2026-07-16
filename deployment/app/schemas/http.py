@@ -172,3 +172,11 @@ class GenerateRequest(BaseModel):
     temperature: float = Field(1.0, ge=0.0, description="Sampling temperature.")
     cfg_value: float = Field(1.5, ge=0.0, description="Classifier-free guidance scale.")
     seed: int | None = Field(None, description="Random seed for generation.")
+    response_format: Literal["mp3", "pcm"] = Field(
+        "mp3",
+        description=(
+            "Output audio encoding. 'mp3' (default) streams audio/mpeg. 'pcm' streams raw "
+            "signed 16-bit little-endian mono PCM (audio/L16) at the model sample rate — "
+            "lossless, no container; see X-Audio-Sample-Rate / X-Audio-Channels headers."
+        ),
+    )

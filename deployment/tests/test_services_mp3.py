@@ -72,6 +72,44 @@ def test_float32_to_s16le_bytes_clips_and_converts():
     assert arr.tolist() == [-32767, -32767, -16383, 0, 16383, 32767, 32767]
 
 
+def test_stream_pcm_emits_raw_s16le():
+    import app.services.mp3 as mp3
+
+    chunks = [
+        np.array([0.0, 0.5, -0.5], dtype=np.float32),
+        np.array([1.0, -1.0], dtype=np.float32),
+    ]
+
+    async def run() -> bytes:
+        out: list[bytes] = []
+        async for b in mp3.stream_pcm(request=_FakeRequest(), wav_chunks=_agen(chunks)):
+            out.append(b)
+        return b"".join(out)
+
+    data = asyncio.run(run())
+    arr = np.frombuffer(data, dtype=np.int16)
+    # Same s16le conversion stream_mp3 feeds into lameenc, emitted directly.
+    assert arr.tolist() == [0, 16383, -16383, 32767, -32767]
+
+
+def test_stream_pcm_stops_on_disconnect():
+    import app.services.mp3 as mp3
+
+    chunks = [np.zeros((4,), dtype=np.float32) for _ in range(4)]
+
+    async def run() -> bytes:
+        out: list[bytes] = []
+        async for b in mp3.stream_pcm(
+            request=_FakeRequest(disconnect_after_checks=0),
+            wav_chunks=_agen(chunks),
+        ):
+            out.append(b)
+        return b"".join(out)
+
+    data = asyncio.run(asyncio.wait_for(run(), timeout=2.0))
+    assert data == b""
+
+
 def test_stream_mp3_happy_path_encodes_and_flushes(monkeypatch):
     from app.core.config import Mp3Config
     import app.services.mp3 as mp3

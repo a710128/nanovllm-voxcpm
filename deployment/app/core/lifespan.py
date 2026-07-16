@@ -47,6 +47,7 @@ def build_lifespan(cfg: ServiceConfig):
             gpu_memory_utilization=cfg.server_pool.gpu_memory_utilization,
             enforce_eager=cfg.server_pool.enforce_eager,
             devices=list(cfg.server_pool.devices),
+            inference_timesteps=cfg.server_pool.inference_timesteps,
             lora_config=lora_config,
         )
         app.state.server = server
