@@ -82,14 +82,17 @@ def _validate_generate_prompt(req: GenerateRequest) -> None:
 @router.post(
     "/generate",
     response_class=StreamingResponse,
-    summary="Generate audio (streaming MP3)",
+    summary="Generate audio (streaming MP3 or PCM)",
     responses={
         200: {
-            "description": "MP3 byte stream",
+            "description": "Streamed audio bytes (MP3 by default, or raw s16le PCM when response_format='pcm')",
             "content": {
                 "audio/mpeg": {
                     "schema": {"type": "string", "format": "binary"},
-                }
+                },
+                "audio/L16": {
+                    "schema": {"type": "string", "format": "binary"},
+                },
             },
             "headers": {
                 "X-Audio-Sample-Rate": {
@@ -99,6 +102,10 @@ def _validate_generate_prompt(req: GenerateRequest) -> None:
                 "X-Audio-Channels": {
                     "description": "Number of audio channels.",
                     "schema": {"type": "integer"},
+                },
+                "X-Audio-Encoding": {
+                    "description": "Audio encoding of the stream ('mp3' or 's16le').",
+                    "schema": {"type": "string"},
                 },
             },
         },
@@ -112,8 +119,10 @@ async def generate(
     request: Request,
     server: Any = Depends(get_server),
 ) -> StreamingResponse:
-    """Generate speech audio as a streamed MP3 byte stream.
+    """Generate speech audio as a streamed byte stream.
 
+    The output encoding is selected via ``response_format``: MP3 (``audio/mpeg``,
+    default) or raw signed 16-bit little-endian mono PCM (``audio/L16``).
     The response is streamed and may terminate early if the client disconnects or
     an internal error occurs after streaming has started.
     """

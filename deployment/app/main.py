@@ -28,7 +28,7 @@ def create_app() -> FastAPI:
             },
             {
                 "name": "generation",
-                "description": "Text-to-speech generation (streaming MP3).",
+                "description": "Text-to-speech generation (streaming MP3 or PCM).",
             },
         ],
         lifespan=build_lifespan(cfg),
