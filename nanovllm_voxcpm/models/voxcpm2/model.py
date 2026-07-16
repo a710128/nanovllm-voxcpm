@@ -16,6 +16,8 @@ from nanovllm_voxcpm.layers.lora import (
 )
 from nanovllm_voxcpm.models.voxcpm2.config import CfmConfig, LoRAConfig, MiniCPM4Config, VoxCPM2Config
 from nanovllm_voxcpm.models.voxcpm2.model_utils import (
+    EulerSolverConfig,
+    EulerSolverInputs,
     apply_rotary_emb,
     build_cfm_t_span,
     build_rope_cos_sin_cache,
@@ -23,10 +25,10 @@ from nanovllm_voxcpm.models.voxcpm2.model_utils import (
     compute_attention_sizes,
     compute_optimized_scale,
     compute_rope_scaling_factor,
-    compute_zero_init_steps,
     parse_gate_up_lora_targets,
     parse_qkv_lora_targets,
     sinusoidal_pos_emb,
+    solve_euler,
 )
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
@@ -450,39 +452,9 @@ class UnifiedCFM(nn.Module):
         cond: torch.Tensor,
         cfg_value: torch.Tensor,
     ):
-        t, dt = t_span[0], t_span[0] - t_span[1]
-        zero_init_steps = compute_zero_init_steps(len(t_span))
-        bsz = x.size(0)
-        x_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
-        mu_in = torch.empty([2 * bsz, mu.size(1)], device=x.device, dtype=x.dtype)
-        t_in = torch.empty([2 * bsz], device=x.device, dtype=x.dtype)
-        dt_in = torch.empty([2 * bsz], device=x.device, dtype=x.dtype)
-        cond_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
-        for step in range(1, len(t_span)):
-            if step <= zero_init_steps:
-                dphi_dt = 0.0
-            else:
-                x_in[:bsz], x_in[bsz:] = x, x
-                mu_in[:bsz] = mu
-                mu_in[bsz:].zero_()
-                t_in[:bsz] = t.unsqueeze(0)
-                t_in[bsz:] = t.unsqueeze(0)
-                dt_in[:bsz] = dt.unsqueeze(0)
-                dt_in[bsz:] = dt.unsqueeze(0)
-                if not self.mean_mode:
-                    dt_in.zero_()
-                cond_in[:bsz], cond_in[bsz:] = cond, cond
-                dphi_dt = self.estimator(x_in, mu_in, t_in, cond_in, dt_in)
-                dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [x.size(0), x.size(0)], dim=0)
-                st_star = self.optimized_scale(dphi_dt.view(bsz, -1), cfg_dphi_dt.view(bsz, -1))
-                st_star = st_star.view(bsz, *([1] * (len(dphi_dt.shape) - 1)))
-                dphi_dt = cfg_dphi_dt * st_star + cfg_value[:, None, None] * (dphi_dt - cfg_dphi_dt * st_star)
-            x = x - dt * dphi_dt
-            t = t - dt
-            sol = x
-            if step < len(t_span) - 1:
-                dt = t - t_span[step + 1]
-        return sol
+        inputs = EulerSolverInputs(x=x, t_span=t_span, mu=mu, cond=cond, cfg_value=cfg_value)
+        config = EulerSolverConfig(in_channels=self.in_channels, mean_mode=self.mean_mode)
+        return solve_euler(inputs, config, self)
 
 
 class VoxCPM2LocEnc(nn.Module):

@@ -4,15 +4,20 @@ All functions here are free of CUDA / flash-attn / Triton dependencies and
 can be exercised in a standard CPU pytest session.
 """
 
-import torch
-
+from nanovllm_voxcpm.models.voxcpm2 import model_utils_cfm as _cfm
 from nanovllm_voxcpm.models.voxcpm2 import model_utils_rope as _rope
 
+EulerSolverConfig = _cfm.EulerSolverConfig
+EulerSolverInputs = _cfm.EulerSolverInputs
 apply_rotary_emb = _rope.apply_rotary_emb
+build_cfm_t_span = _cfm.build_cfm_t_span
 build_rope_cos_sin_cache = _rope.build_rope_cos_sin_cache
 build_rope_inv_freq = _rope.build_rope_inv_freq
+compute_optimized_scale = _cfm.compute_optimized_scale
 compute_rope_scaling_factor = _rope.compute_rope_scaling_factor
+compute_zero_init_steps = _cfm.compute_zero_init_steps
 sinusoidal_pos_emb = _rope.sinusoidal_pos_emb
+solve_euler = _cfm.solve_euler
 
 # ---------------------------------------------------------------------------
 # Attention size calculations
@@ -167,49 +172,3 @@ def derive_decoder_config_fields(
         "kv_channels": dit_kv_channels,
         "vocab_size": 0,
     }
-
-
-def compute_optimized_scale(
-    positive_flat: torch.Tensor,
-    negative_flat: torch.Tensor,
-) -> torch.Tensor:
-    """Compute the CFG optimised scale (UnifiedCFM.optimized_scale logic).
-
-    Args:
-        positive_flat: Conditioned flow estimate, shape ``(bsz, N)``.
-        negative_flat: Unconditioned flow estimate, shape ``(bsz, N)``.
-
-    Returns:
-        Scale tensor of shape ``(bsz, 1)``.
-    """
-    dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
-    squared_norm = torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
-    return dot_product / squared_norm
-
-
-def build_cfm_t_span(inference_timesteps: int, device: torch.device | None = None) -> torch.Tensor:
-    """Build the cosine-adjusted time span used in UnifiedCFM.forward.
-
-    Args:
-        inference_timesteps: Number of Euler steps.
-        device: Target device; defaults to CPU.
-
-    Returns:
-        Float32 tensor of shape ``(inference_timesteps + 1,)`` decreasing from
-        approximately 1 to approximately 0 with a cosine adjustment applied.
-    """
-    t_span = torch.linspace(1, 0, inference_timesteps + 1, device=device, dtype=torch.float32)
-    t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
-    return t_span
-
-
-def compute_zero_init_steps(t_span_len: int) -> int:
-    """Return the number of zero-initialised Euler steps (4 % of total span).
-
-    Args:
-        t_span_len: Length of the full t_span tensor (``inference_timesteps + 1``).
-
-    Returns:
-        ``max(1, int(t_span_len * 0.04))``.
-    """
-    return max(1, int(t_span_len * 0.04))

@@ -4,262 +4,21 @@ All tests run on CPU and exercise the pure-math helpers extracted from model.py.
 No GPU, flash-attn, or triton dependencies are required.
 """
 
-import math
+from types import SimpleNamespace
 
 import pytest
 
 torch = pytest.importorskip("torch")
 
+from nanovllm_voxcpm.models.voxcpm2 import model_utils
 from nanovllm_voxcpm.models.voxcpm2.model_utils import (
-    apply_rotary_emb,
     build_cfm_t_span,
-    build_rope_cos_sin_cache,
-    build_rope_inv_freq,
     compute_attention_sizes,
     compute_optimized_scale,
-    compute_rope_scaling_factor,
     compute_zero_init_steps,
-    derive_decoder_config_fields,
-    derive_encoder_config_fields,
     parse_gate_up_lora_targets,
     parse_qkv_lora_targets,
-    sinusoidal_pos_emb,
 )
-
-# ---------------------------------------------------------------------------
-# compute_rope_scaling_factor
-# ---------------------------------------------------------------------------
-
-
-class TestComputeRopeScalingFactor:
-    def test_identity_when_equal(self):
-        # scale = 1.0 → log(1) = 0 → factor = sqrt(1) = 1.0
-        result = compute_rope_scaling_factor(32768, 32768)
-        assert result == pytest.approx(1.0)
-
-    def test_extended_context_greater_than_one(self):
-        result = compute_rope_scaling_factor(131072, 32768)
-        # scale = 4, log(4)/log(32768) = log(4)/log(32768)
-        expected = math.sqrt(1 + math.log(4) / math.log(32768))
-        assert result == pytest.approx(expected, rel=1e-6)
-
-    def test_double_context(self):
-        result = compute_rope_scaling_factor(65536, 32768)
-        expected = math.sqrt(1 + math.log(2) / math.log(32768))
-        assert result == pytest.approx(expected, rel=1e-6)
-
-    def test_return_type_is_float(self):
-        result = compute_rope_scaling_factor(32768, 32768)
-        assert isinstance(result, float)
-
-
-# ---------------------------------------------------------------------------
-# build_rope_inv_freq
-# ---------------------------------------------------------------------------
-
-
-class TestBuildRopeInvFreq:
-    def test_shape(self):
-        inv_freq = build_rope_inv_freq(dim=16, base=10000.0)
-        assert inv_freq.shape == (8,)
-
-    def test_all_positive(self):
-        inv_freq = build_rope_inv_freq(dim=16, base=10000.0)
-        assert (inv_freq > 0).all()
-
-    def test_decreasing(self):
-        inv_freq = build_rope_inv_freq(dim=16, base=10000.0)
-        # Higher frequency indices should have smaller inv_freq values
-        assert (inv_freq[:-1] >= inv_freq[1:]).all()
-
-    def test_first_element_is_one(self):
-        # For index 0: base ** (0 / dim) = 1.0, so inv_freq[0] = 1.0
-        inv_freq = build_rope_inv_freq(dim=8, base=10000.0)
-        assert inv_freq[0].item() == pytest.approx(1.0)
-
-    def test_base_affects_values(self):
-        inv_a = build_rope_inv_freq(dim=8, base=10000.0)
-        inv_b = build_rope_inv_freq(dim=8, base=100.0)
-        # Smaller base → larger inv_freq for indices > 0
-        assert (inv_b[1:] > inv_a[1:]).all()
-
-
-# ---------------------------------------------------------------------------
-# build_rope_cos_sin_cache
-# ---------------------------------------------------------------------------
-
-
-class TestBuildRopeCosSinCache:
-    def _make_inv_freq(self, dim=8, base=10000.0):
-        return build_rope_inv_freq(dim, base)
-
-    def test_output_shapes(self):
-        inv_freq = self._make_inv_freq(dim=8)
-        sf = compute_rope_scaling_factor(32, 32)
-        cos, sin = build_rope_cos_sin_cache(
-            seq_len=32,
-            inv_freq=inv_freq,
-            scaling_factor=sf,
-            short_factor=[1.0] * 4,
-            long_factor=[2.0] * 4,
-            original_max_position_embeddings=32,
-        )
-        assert cos.shape == (32, 8)
-        assert sin.shape == (32, 8)
-
-    def test_scaling_factor_applied(self):
-        inv_freq = self._make_inv_freq(dim=8)
-        cos1, _ = build_rope_cos_sin_cache(
-            seq_len=32,
-            inv_freq=inv_freq,
-            scaling_factor=1.0,
-            short_factor=[1.0] * 4,
-            long_factor=[1.0] * 4,
-            original_max_position_embeddings=32,
-        )
-        cos2, _ = build_rope_cos_sin_cache(
-            seq_len=32,
-            inv_freq=inv_freq,
-            scaling_factor=2.0,
-            short_factor=[1.0] * 4,
-            long_factor=[1.0] * 4,
-            original_max_position_embeddings=32,
-        )
-        torch.testing.assert_close(cos2, cos1 * 2.0)
-
-    def test_short_vs_long_factor_selection(self):
-        """seq_len <= original_max → short_factor; seq_len > original_max → long_factor."""
-        inv_freq = self._make_inv_freq(dim=8)
-        short_factor = [1.0] * 4
-        long_factor = [3.0] * 4  # deliberately different
-
-        # seq_len == original_max → short branch
-        cos_short, _ = build_rope_cos_sin_cache(
-            seq_len=32,
-            inv_freq=inv_freq,
-            scaling_factor=1.0,
-            short_factor=short_factor,
-            long_factor=long_factor,
-            original_max_position_embeddings=32,
-        )
-        # seq_len > original_max → long branch
-        cos_long, _ = build_rope_cos_sin_cache(
-            seq_len=64,
-            inv_freq=inv_freq,
-            scaling_factor=1.0,
-            short_factor=short_factor,
-            long_factor=long_factor,
-            original_max_position_embeddings=32,
-        )
-        # Different factors → different values (first 32 rows compared)
-        assert not torch.allclose(cos_short, cos_long[:32])
-
-    def test_dtype_propagated(self):
-        inv_freq = self._make_inv_freq(dim=8)
-        cos, sin = build_rope_cos_sin_cache(
-            seq_len=8,
-            inv_freq=inv_freq,
-            scaling_factor=1.0,
-            short_factor=[1.0] * 4,
-            long_factor=[1.0] * 4,
-            original_max_position_embeddings=8,
-            dtype=torch.float16,
-        )
-        assert cos.dtype == torch.float16
-        assert sin.dtype == torch.float16
-
-
-# ---------------------------------------------------------------------------
-# apply_rotary_emb
-# ---------------------------------------------------------------------------
-
-
-class TestApplyRotaryEmb:
-    def _make_tensors(self, num_tokens=4, num_heads=2, head_dim=8):
-        x = torch.randn(num_tokens, num_heads, head_dim)
-        cos = torch.ones(num_tokens, head_dim)
-        sin = torch.zeros(num_tokens, head_dim)
-        return x, cos, sin
-
-    def test_output_shape(self):
-        x, cos, sin = self._make_tensors()
-        out = apply_rotary_emb(x, cos, sin)
-        assert out.shape == x.shape
-
-    def test_identity_when_cos1_sin0(self):
-        # cos=1, sin=0 → rotate_half zeroed out → output should equal input
-        x, cos, sin = self._make_tensors()
-        out = apply_rotary_emb(x, cos, sin)
-        torch.testing.assert_close(out, x, rtol=1e-5, atol=1e-5)
-
-    def test_dtype_preserved_float16(self):
-        x = torch.randn(4, 2, 8, dtype=torch.float16)
-        cos = torch.ones(4, 8, dtype=torch.float16)
-        sin = torch.zeros(4, 8, dtype=torch.float16)
-        out = apply_rotary_emb(x, cos, sin)
-        assert out.dtype == torch.float16
-
-    def test_rotate_half_negate_pattern(self):
-        """With cos=0, sin=1 the output should be rotate_half(x)."""
-        num_tokens, num_heads, head_dim = 2, 1, 4
-        x = torch.randn(num_tokens, num_heads, head_dim)
-        cos = torch.zeros(num_tokens, head_dim)
-        sin = torch.ones(num_tokens, head_dim)
-        out = apply_rotary_emb(x, cos, sin)
-        x1, x2 = x.chunk(2, dim=-1)
-        expected = torch.cat((-x2, x1), dim=-1)
-        torch.testing.assert_close(out, expected, rtol=1e-5, atol=1e-5)
-
-    def test_non_unit_cos_sin_values(self):
-        torch.manual_seed(42)
-        num_tokens, num_heads, head_dim = 3, 2, 8
-        x = torch.randn(num_tokens, num_heads, head_dim)
-        angle = torch.rand(num_tokens, head_dim) * 2 * math.pi
-        cos = angle.cos()
-        sin = angle.sin()
-        out = apply_rotary_emb(x, cos, sin)
-        # Output must differ from input when sin != 0
-        assert not torch.allclose(out, x)
-        # Shape preserved
-        assert out.shape == x.shape
-
-
-# ---------------------------------------------------------------------------
-# sinusoidal_pos_emb
-# ---------------------------------------------------------------------------
-
-
-class TestSinusoidalPosEmb:
-    def test_output_shape_1d(self):
-        x = torch.tensor([0.0, 0.5, 1.0])
-        out = sinusoidal_pos_emb(x, dim=8)
-        assert out.shape == (3, 8)
-
-    def test_output_shape_scalar(self):
-        x = torch.tensor(0.5)
-        out = sinusoidal_pos_emb(x, dim=8)
-        assert out.shape == (1, 8)
-
-    def test_first_half_is_sin_second_half_is_cos(self):
-        # At x=0, sin(0)=0 and cos(0)=1 → first half ~0, second half ~1
-        x = torch.tensor([0.0])
-        out = sinusoidal_pos_emb(x, dim=8, scale=1000.0)
-        # First 4 elements should be ~0 (sin of small angles at t=0)
-        torch.testing.assert_close(out[0, :4], torch.zeros(4), atol=1e-5, rtol=0)
-        # Last 4 elements should be ~1 (cos of small angles at t=0)
-        torch.testing.assert_close(out[0, 4:], torch.ones(4), atol=1e-5, rtol=0)
-
-    def test_scale_affects_output(self):
-        x = torch.tensor([1.0])
-        out1 = sinusoidal_pos_emb(x, dim=8, scale=1.0)
-        out2 = sinusoidal_pos_emb(x, dim=8, scale=100.0)
-        assert not torch.allclose(out1, out2)
-
-    def test_different_positions_give_different_embeddings(self):
-        x = torch.tensor([0.1, 0.9])
-        out = sinusoidal_pos_emb(x, dim=8)
-        assert not torch.allclose(out[0], out[1])
-
 
 # ---------------------------------------------------------------------------
 # compute_attention_sizes
@@ -462,134 +221,121 @@ class TestComputeZeroInitSteps:
         assert compute_zero_init_steps(50) == 2
 
 
-# ---------------------------------------------------------------------------
-# derive_encoder_config_fields
-# ---------------------------------------------------------------------------
+class _ZeroEstimator:
+    def __init__(self):
+        self.dt_inputs: list[torch.Tensor] = []
+
+    def __call__(self, x, mu, t, cond, dt):
+        self.dt_inputs.append(dt.clone())
+        return torch.zeros_like(x)
 
 
-class TestDeriveEncoderConfigFields:
-    def test_correct_fields_returned(self):
-        fields = derive_encoder_config_fields(
-            lm_config_hidden_size=2048,
-            lm_config_intermediate_size=8192,
-            lm_config_num_attention_heads=32,
-            encoder_hidden_dim=512,
-            encoder_ffn_dim=2048,
-            encoder_num_heads=8,
-            encoder_num_layers=4,
-            encoder_kv_channels=64,
-        )
-        assert fields["hidden_size"] == 512
-        assert fields["intermediate_size"] == 2048
-        assert fields["num_attention_heads"] == 8
-        assert fields["num_hidden_layers"] == 4
-        assert fields["kv_channels"] == 64
-        assert fields["vocab_size"] == 0
+class _EulerOps:
+    def __init__(self):
+        self.estimator = _ZeroEstimator()
 
-    def test_none_kv_channels_preserved(self):
-        fields = derive_encoder_config_fields(
-            lm_config_hidden_size=64,
-            lm_config_intermediate_size=128,
-            lm_config_num_attention_heads=4,
-            encoder_hidden_dim=8,
-            encoder_ffn_dim=16,
-            encoder_num_heads=2,
-            encoder_num_layers=1,
-            encoder_kv_channels=None,
-        )
-        assert fields["kv_channels"] is None
+    def optimized_scale(self, positive_flat, negative_flat):
+        return compute_optimized_scale(positive_flat, negative_flat)
 
 
-# ---------------------------------------------------------------------------
-# derive_decoder_config_fields
-# ---------------------------------------------------------------------------
+def test_solve_euler_preserves_input_for_zero_flow_and_zeroes_dt_outside_mean_mode():
+    x = torch.randn(2, 4, 3)
+    inputs = model_utils.EulerSolverInputs(
+        x=x,
+        t_span=torch.linspace(1, 0, 7),
+        mu=torch.randn(2, 12),
+        cond=torch.randn(2, 4, 3),
+        cfg_value=torch.ones(2),
+    )
+    config = model_utils.EulerSolverConfig(in_channels=4, mean_mode=False)
+    ops = _EulerOps()
+
+    result = model_utils.solve_euler(inputs, config, ops)
+
+    torch.testing.assert_close(result, x)
+    assert ops.estimator.dt_inputs
+    for dt_input in ops.estimator.dt_inputs:
+        torch.testing.assert_close(dt_input, torch.zeros_like(dt_input))
 
 
-class TestDeriveDecoderConfigFields:
-    def test_correct_fields_returned(self):
-        fields = derive_decoder_config_fields(
-            dit_hidden_dim=256,
-            dit_ffn_dim=1024,
-            dit_num_heads=4,
-            dit_num_layers=2,
-            dit_kv_channels=32,
-        )
-        assert fields["hidden_size"] == 256
-        assert fields["intermediate_size"] == 1024
-        assert fields["num_attention_heads"] == 4
-        assert fields["num_hidden_layers"] == 2
-        assert fields["kv_channels"] == 32
-        assert fields["vocab_size"] == 0
+def test_minicpm_long_rope_forward_matches_token_helper():
+    from nanovllm_voxcpm.models.voxcpm2.model import MiniCPMLongRoPE
 
-    def test_none_kv_channels_preserved(self):
-        fields = derive_decoder_config_fields(
-            dit_hidden_dim=8, dit_ffn_dim=16, dit_num_heads=2, dit_num_layers=1, dit_kv_channels=None
-        )
-        assert fields["kv_channels"] is None
+    rope = MiniCPMLongRoPE(8, 8, 16, 10000.0)
+    positions = torch.tensor([1, 3])
+    query = torch.randn(2, 16)
+    key = torch.randn(2, 8)
+
+    query_out, key_out = rope(positions, query, key)
+
+    expected_query = model_utils.apply_rotary_emb(
+        query.view(2, 2, 8), rope.cos_cached[positions], rope.sin_cached[positions]
+    )
+    expected_key = model_utils.apply_rotary_emb(
+        key.view(2, 1, 8), rope.cos_cached[positions], rope.sin_cached[positions]
+    )
+    torch.testing.assert_close(query_out, expected_query.view_as(query))
+    torch.testing.assert_close(key_out, expected_key.view_as(key))
 
 
-# ---------------------------------------------------------------------------
-# Integration: helpers consistent with MiniCPMLongRoPE module
-# ---------------------------------------------------------------------------
+def test_scalar_quantization_layer_rounds_projected_latents():
+    from nanovllm_voxcpm.models.voxcpm2.model import ScalarQuantizationLayer
+
+    layer = ScalarQuantizationLayer(2, 2, latent_dim=2, scale=2)
+    with torch.no_grad():
+        layer.in_proj.weight.copy_(torch.eye(2))
+        layer.in_proj.bias.zero_()
+        layer.out_proj.weight.copy_(torch.eye(2))
+        layer.out_proj.bias.zero_()
+
+    result = layer(torch.tensor([[0.2, 1.0]]))
+
+    expected = torch.round(torch.tanh(torch.tensor([[0.2, 1.0]])) * 2) / 2
+    torch.testing.assert_close(result, expected)
 
 
-class TestHelpersConsistentWithModule:
-    """Verify that the extracted helpers reproduce what MiniCPMLongRoPE stores."""
+class _InertLayer(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
 
-    def test_scaling_factor_matches_module(self):
-        from nanovllm_voxcpm.models.voxcpm2.model import MiniCPMLongRoPE
+    def forward(self, value):
+        return value
 
-        head_dim = 8
-        rope = MiniCPMLongRoPE(
-            head_size=head_dim,
-            rotary_dim=head_dim,
-            max_position_embeddings=64,
-            base=10000.0,
-            short_factor=[1.0] * (head_dim // 2),
-            long_factor=[1.0] * (head_dim // 2),
-            original_max_position_embeddings=32,
-        )
-        expected = compute_rope_scaling_factor(64, 32)
-        assert rope.scaling_factor == pytest.approx(expected)
 
-    def test_inv_freq_matches_module(self):
-        from nanovllm_voxcpm.models.voxcpm2.model import MiniCPMLongRoPE
+def test_attention_and_mlp_select_lora_layers_on_cpu(monkeypatch):
+    from nanovllm_voxcpm.models.voxcpm2 import model as voxcpm2_model
 
-        head_dim = 8
-        rope = MiniCPMLongRoPE(
-            head_size=head_dim,
-            rotary_dim=head_dim,
-            max_position_embeddings=32,
-            base=10000.0,
-            original_max_position_embeddings=32,
-        )
-        expected = build_rope_inv_freq(head_dim, 10000.0)
-        torch.testing.assert_close(rope.inv_freq, expected)
+    monkeypatch.setattr(voxcpm2_model, "get_tp_world_size", lambda: 1)
+    for layer_name in (
+        "Attention",
+        "LoRAQKVParallelLinear",
+        "LoRARowParallelLinear",
+        "LoRAMergedColumnParallelLinear",
+        "RMSNorm",
+        "SiluAndMul",
+    ):
+        monkeypatch.setattr(voxcpm2_model, layer_name, _InertLayer)
+    lora_config = SimpleNamespace(
+        max_loras=2,
+        max_lora_rank=4,
+        target_modules_lm=["q_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    )
 
-    def test_apply_rotary_emb_matches_module_method(self):
-        from nanovllm_voxcpm.models.voxcpm2.model import MiniCPMLongRoPE
+    attention = voxcpm2_model.Cpm4Attention(
+        hidden_size=8,
+        num_heads=2,
+        num_kv_heads=2,
+        head_dim=4,
+        use_rope=False,
+        apply_qk_norm=True,
+        lora_config=lora_config,
+    )
+    mlp = voxcpm2_model.Cpm4MLP(hidden_size=8, intermediate_size=16, lora_config=lora_config)
 
-        head_dim = 8
-        rope = MiniCPMLongRoPE(
-            head_size=head_dim,
-            rotary_dim=head_dim,
-            max_position_embeddings=32,
-            base=10000.0,
-            original_max_position_embeddings=32,
-        )
-        x = torch.randn(4, 2, head_dim)
-        cos = torch.randn(4, head_dim)
-        sin = torch.randn(4, head_dim)
-        module_out = rope._apply_rotary_emb(x, cos, sin)
-        helper_out = apply_rotary_emb(x, cos, sin)
-        torch.testing.assert_close(module_out, helper_out)
-
-    def test_sinusoidal_pos_emb_matches_module(self):
-        from nanovllm_voxcpm.models.voxcpm2.model import SinusoidalPosEmb
-
-        dim = 16
-        module = SinusoidalPosEmb(dim)
-        x = torch.tensor([0.1, 0.5, 0.9])
-        module_out = module(x, scale=1000)
-        helper_out = sinusoidal_pos_emb(x, dim, scale=1000.0)
-        torch.testing.assert_close(module_out, helper_out)
+    assert isinstance(attention.qkv_proj, _InertLayer)
+    assert isinstance(attention.o_proj, _InertLayer)
+    assert attention.rotary_emb is None
+    assert isinstance(attention.q_norm, _InertLayer)
+    assert isinstance(attention.k_norm, _InertLayer)
+    assert isinstance(mlp.gate_up_proj, _InertLayer)
+    assert isinstance(mlp.down_proj, _InertLayer)
