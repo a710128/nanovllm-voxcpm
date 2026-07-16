@@ -209,8 +209,16 @@ jobs:
             ffmpeg libsndfile1
           sudo rm -rf /var/lib/apt/lists/*
 
-      - name: Sync all workspace deps (includes fastapi for deployment tests)
-        run: uv sync --all-packages --group dev
+      - name: Sync CPU coverage dependencies
+        # The CPU suite provides a flash_attn shim (tests/_shims.py), so this
+        # runner does not need the CUDA extension. Keep all locked workspace
+        # dependencies, but skip building flash-attn (requires nvcc/CUDA_HOME).
+        run: |
+          uv sync \
+            --all-packages \
+            --group dev \
+            --no-install-package flash-attn \
+            --frozen
 
       - name: Run combined coverage
         # threshold-free measurement; floor enforced in the step below
