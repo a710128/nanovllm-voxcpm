@@ -209,6 +209,7 @@ def test_dit_lora_rows_per_sample_with_dit_enabled():
     assert runner._dit_lora_rows_per_sample() == 40
 
 
+@pytest.mark.gpu
 def test_build_lora_contexts_no_adapters_returns_empty_lm_and_no_lora_flags():
     import nanovllm_voxcpm.engine.model_runner as model_runner
     from nanovllm_voxcpm.engine.lora_manager import LoRARuntime
@@ -447,6 +448,7 @@ def test_synchronize_rpc_result_exit_with_error_raises():
         runner._synchronize_rpc_result("exit", exc)
 
 
+@pytest.mark.gpu
 def test_prepare_prefill_context_slot_mapping_correctness(monkeypatch):
     """Verify positions, slot_mapping, cu_seqlens calculated for prefill."""
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -499,6 +501,7 @@ def test_prepare_prefill_context_slot_mapping_correctness(monkeypatch):
     assert contexts_set["slot_mapping"] == [40, 41, 42, 43, 44, 45]
 
 
+@pytest.mark.gpu
 def test_prepare_prefill_context_with_prefix_cache(monkeypatch):
     """cu_seqlens_k > cu_seqlens_q triggers block_tables prep (prefix cache path)."""
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -539,6 +542,7 @@ def test_prepare_prefill_context_with_prefix_cache(monkeypatch):
     assert bt_calls == [1]
 
 
+@pytest.mark.gpu
 def test_prepare_prefill_context_warmup_empty_block_table(monkeypatch):
     """Empty block_table (warmup) should not append to slot_mapping."""
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -584,6 +588,7 @@ def test_prepare_prefill_context_warmup_empty_block_table(monkeypatch):
     assert slot_mappings_captured == [[]]
 
 
+@pytest.mark.gpu
 def test_prepare_decode_context_positions_and_slot_mapping(monkeypatch):
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
@@ -631,6 +636,7 @@ def test_prepare_decode_context_positions_and_slot_mapping(monkeypatch):
     assert captured["seqs_count"] == 1
 
 
+@pytest.mark.gpu
 def test_prepare_decode_context_multiple_seqs(monkeypatch):
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
@@ -662,6 +668,7 @@ def test_prepare_decode_context_multiple_seqs(monkeypatch):
     assert positions.tolist() == [4, 8]
 
 
+@pytest.mark.gpu
 def test_prepare_block_tables_pads_to_max_length(monkeypatch):
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
@@ -865,6 +872,7 @@ def test_synchronize_rpc_result_multi_rank_local_error_reraises(monkeypatch):
         runner._synchronize_rpc_result("some_method", exc)
 
 
+@pytest.mark.gpu
 def test_build_lora_contexts_with_active_adapter():
     import nanovllm_voxcpm.engine.model_runner as model_runner
     from nanovllm_voxcpm.engine.lora_manager import LoRARuntime, LoRAModelPayload
