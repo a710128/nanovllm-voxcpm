@@ -1,0 +1,80 @@
+# Task 13 — Continuous Test Coverage Evidence
+# Date: 2026-07-16
+
+## Acceptance Command
+uv run pytest -k "linear or embed" -m "not gpu" -q
+
+## Result
+49 passed, 256 deselected in 1.61s   ✅  exit 0
+
+## Coverage Measurement
+Command:
+  uv run python -m pytest tests/unit/test_linear_layers.py tests/unit/test_embed_head.py \
+    --cov=nanovllm_voxcpm --cov-report=term --cov-config=/tmp/coverage_test.ini -q
+
+Note: Full `tests/unit/` with --cov triggers a torch reimport error from
+`dynamic_context=test_function` in the project's pyproject.toml coverage config.
+Running the two target test files directly (without dynamic_context) avoids it and
+produces correct line/branch data. The -k "linear or embed" filter runs without issue.
+
+## Coverage Results
+
+Name                                       Stmts  Miss  Branch  BrPart  Cover
+nanovllm_voxcpm/layers/embed_head.py         50     9       6       2    80%  ✅ (target: 70%)
+nanovllm_voxcpm/layers/linear.py             99     1       8       1    98%  ✅ (target: 70%)
+
+## Files Changed / Created
+
+tests/unit/test_linear_layers.py  — EXTENDED (was 33 lines → now 370 lines)
+  New tests added:
+  - test_linear_base_forward_raises
+  - test_replicated_linear_constructor_no_bias
+  - test_replicated_linear_constructor_with_bias
+  - test_replicated_linear_weight_loader
+  - test_replicated_linear_forward
+  - test_replicated_linear_forward_with_bias
+  - test_column_parallel_linear_constructor_tp1
+  - test_column_parallel_linear_weight_loader_tp1
+  - test_column_parallel_linear_forward_tp1
+  - test_merged_column_parallel_linear_constructor_tp1
+  - test_merged_column_parallel_linear_weight_loader_tp1
+  - test_merged_column_parallel_linear_weight_loader_requires_int_shard
+  - test_merged_column_parallel_linear_forward_tp1
+  - test_qkv_parallel_linear_constructor_tp1
+  - test_qkv_parallel_linear_constructor_gqa_tp1
+  - test_qkv_parallel_linear_weight_loader_qkv
+  - test_qkv_parallel_linear_weight_loader_invalid_shard
+  - test_qkv_parallel_linear_forward_tp1
+  - test_row_parallel_linear_constructor_tp1
+  - test_row_parallel_linear_weight_loader_tp1
+  - test_row_parallel_linear_forward_tp1
+  - test_row_parallel_linear_forward_with_bias_tp1
+  - test_row_parallel_linear_weight_loader_tp2_shards
+
+tests/unit/test_embed_head.py  — CREATED (new file, 140 lines)
+  Tests added:
+  - test_vocab_parallel_embedding_constructor_tp1
+  - test_vocab_parallel_embedding_partition_indices_tp1
+  - test_vocab_parallel_embedding_partition_indices_tp2_rank0
+  - test_vocab_parallel_embedding_partition_indices_tp2_rank1
+  - test_vocab_parallel_embedding_requires_divisible_num_embeddings
+  - test_vocab_parallel_embedding_weight_loader_tp1
+  - test_vocab_parallel_embedding_weight_loader_tp2_rank0
+  - test_vocab_parallel_embedding_weight_loader_tp2_rank1
+  - test_vocab_parallel_embedding_forward_tp1
+  - test_vocab_parallel_embedding_weight_has_loader_attr
+  - test_parallel_lm_head_constructor_tp1
+  - test_parallel_lm_head_rejects_bias
+  - test_parallel_lm_head_forward_decode_tp1
+  - test_parallel_lm_head_forward_prefill_tp1
+  - test_vocab_parallel_embedding_forward_tp2_all_reduce  [@pytest.mark.gpu]
+  - test_parallel_lm_head_forward_tp2_all_gather          [@pytest.mark.gpu]
+
+## Uncovered Lines (expected — GPU/distributed paths)
+
+embed_head.py lines not covered:
+  - 37-42: tp_size > 1 all_reduce path in VocabParallelEmbedding.forward  [@gpu]
+  - 64-67: tp_size > 1 all_gather path in ParallelLMHead.forward           [@gpu]
+
+linear.py lines not covered:
+  - 162-163: tp_size > 1 all_reduce in RowParallelLinear.forward            [@gpu]
