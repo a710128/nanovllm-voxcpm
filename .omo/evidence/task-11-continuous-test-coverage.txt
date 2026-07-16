@@ -1,0 +1,24 @@
+# Task 11: voxcpm2 utils coverage evidence
+# Date: 2026-07-16
+# Command: uv run pytest tests/unit/test_voxcpm2_utils.py --cov=nanovllm_voxcpm.models.voxcpm2.utils --cov-report=term -q
+
+## Test results
+20 passed in 0.11s
+
+## Coverage report
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.10.12-final-0 _______________
+
+Name    Stmts   Miss Branch BrPart  Cover
+-----------------------------------------
+TOTAL      26      0      6      0   100%
+
+1 file skipped due to complete coverage.
+
+## Summary
+- File: nanovllm_voxcpm/models/voxcpm2/utils.py
+- Coverage: 100% (was 12%)
+- Tests: 20 tests across 3 test classes
+  - TestCharTokenizerWrapperTokenize (10 tests): tokenize() happy paths + edge cases
+  - TestCharTokenizerWrapperCall (6 tests): __call__() happy paths + error wrapping
+  - TestMulticharTokenSetBuilding (4 tests): multichar_tokens set construction
