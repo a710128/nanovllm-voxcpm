@@ -9,6 +9,8 @@ Features:
 
 This repository contains a Python package (`nanovllm_voxcpm/`) plus an optional FastAPI demo.
 
+**Coverage**: ~71% combined (core + deployment) - see [CI coverage job](.github/workflows/ci.yml) for the latest.
+
 ## Installation
 
 ### Install from PyPI
