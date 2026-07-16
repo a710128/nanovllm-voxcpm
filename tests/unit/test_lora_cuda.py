@@ -415,6 +415,39 @@ def test_lora_capture_cudagraph_keeps_python_host_flags():
     assert 1 in runner.graphs["lora"]
 
 
+def test_lora_capture_cudagraph_respects_max_num_seqs_below_eight():
+    from types import SimpleNamespace
+
+    from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
+
+    set_backend_for_testing(_VendoredTritonPunicaBackend())
+    runner = object.__new__(_TinyCaptureRunner)
+    runner.__class__ = type("_TinyCaptureRunnerInstance", (_TinyCaptureRunner, BaseModelRunner), {})
+    runner.max_lora_rank = 2
+    runner.max_loras = 1
+    runner.block_size = 256
+    runner.model = _TinyDecodeModel(max_loras=1, max_lora_rank=2).cuda()
+    runner._config = SimpleNamespace(
+        max_num_seqs=4,
+        max_model_len=8,
+        lora_config=SimpleNamespace(max_loras=1, max_lora_rank=2),
+    )
+
+    default_device = torch.empty(()).device
+    torch.set_default_device("cuda")
+    try:
+        runner.capture_cudagraph()
+    finally:
+        torch.set_default_device(default_device)
+        set_backend_for_testing(_FakePunicaBackend())
+
+    assert runner.graph_bs == [1, 2, 4]
+    assert 8 not in runner.graphs["base"]
+    assert 8 not in runner.graphs["lora"]
+    assert runner.graph_vars["positions"].numel() == 4
+
+
 def test_lora_decode_smoke_cuda_graph_capture_and_two_decode_steps():
     from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
     from nanovllm_voxcpm.utils.context import set_lora_context

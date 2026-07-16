@@ -786,7 +786,8 @@ class BaseModelRunner:
         }
         outputs = self.make_dummy_outputs(max_bs)
 
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        graph_bs_candidates = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16)) + [max_bs]
+        self.graph_bs = sorted({bs for bs in graph_bs_candidates if 1 <= bs <= max_bs})
         self.graphs = {"base": {}, "lora": {}}
         self.graph_pool = None
         capture_lora_graphs = bool(config.lora_config is not None and is_lora_available())
