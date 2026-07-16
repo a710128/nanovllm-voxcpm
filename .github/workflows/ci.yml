@@ -213,12 +213,12 @@ jobs:
         # The CPU suite provides a flash_attn shim (tests/_shims.py), so this
         # runner does not need the CUDA extension. Keep all locked workspace
         # dependencies, but skip building flash-attn (requires nvcc/CUDA_HOME).
+        # No --frozen: uv.lock is gitignored, so CI resolves deps at sync time.
         run: |
           uv sync \
             --all-packages \
             --group dev \
-            --no-install-package flash-attn \
-            --frozen
+            --no-install-package flash-attn
 
       - name: Run combined coverage
         # threshold-free measurement; floor enforced in the step below
