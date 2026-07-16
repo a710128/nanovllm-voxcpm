@@ -118,14 +118,18 @@ def _run_layer(label: str, layer: torch.nn.Module, hidden_size: int, iters: int,
 
 
 def _make_qkv_layer() -> LoRAQKVParallelLinear:
-    layer = LoRAQKVParallelLinear(
-        hidden_size=64,
-        head_size=8,
-        total_num_heads=4,
-        total_num_kv_heads=2,
-        max_loras=1,
-        max_lora_rank=8,
-    ).cuda().half()
+    layer = (
+        LoRAQKVParallelLinear(
+            hidden_size=64,
+            head_size=8,
+            total_num_heads=4,
+            total_num_kv_heads=2,
+            max_loras=1,
+            max_lora_rank=8,
+        )
+        .cuda()
+        .half()
+    )
     with torch.no_grad():
         layer.weight.normal_(mean=0.0, std=0.02)
         layer.set_slot_lora(
@@ -143,12 +147,16 @@ def _make_qkv_layer() -> LoRAQKVParallelLinear:
 
 
 def _make_merged_layer() -> LoRAMergedColumnParallelLinear:
-    layer = LoRAMergedColumnParallelLinear(
-        input_size=64,
-        output_sizes=[64, 64],
-        max_loras=1,
-        max_lora_rank=8,
-    ).cuda().half()
+    layer = (
+        LoRAMergedColumnParallelLinear(
+            input_size=64,
+            output_sizes=[64, 64],
+            max_loras=1,
+            max_lora_rank=8,
+        )
+        .cuda()
+        .half()
+    )
     with torch.no_grad():
         layer.weight.normal_(mean=0.0, std=0.02)
         layer.set_slot_lora(
