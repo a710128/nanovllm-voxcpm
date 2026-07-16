@@ -22,7 +22,6 @@ def pytest_configure(config):
     # are decorated with `@torch.compile`, which would otherwise trigger
     # TorchDynamo/Inductor and attempt to build extensions.
     os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
-    config.addinivalue_line("markers", "gpu: tests that require a real CUDA GPU")
 
     try:  # pragma: no cover
         import torch._dynamo
@@ -36,18 +35,19 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    cuda_visible_raw = os.environ.get("CUDA_VISIBLE_DEVICES")
+    explicitly_hidden = cuda_visible_raw is not None and cuda_visible_raw == ""
     cuda_available = False
     if _module_available("torch"):
         import torch
 
         cuda_available = torch.cuda.is_available()
 
-    should_skip = not cuda_available or cuda_visible == ""
+    should_skip = not cuda_available or explicitly_hidden
 
     if should_skip:
         skip_gpu = pytest.mark.skip(
-            reason="requires a real CUDA GPU (CUDA_VISIBLE_DEVICES is empty or no CUDA available)",
+            reason="requires a real CUDA GPU (CUDA_VISIBLE_DEVICES explicitly hides devices or no CUDA available)",
         )
         for item in items:
             if item.get_closest_marker("gpu"):

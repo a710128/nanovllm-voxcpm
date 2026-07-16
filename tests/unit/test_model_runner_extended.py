@@ -1346,7 +1346,6 @@ def test_allocate_kv_cache_auto_sizing_no_budget_raises(monkeypatch):
         runner.allocate_kv_cache()
 
 
-@pytest.mark.gpu  # requires real CUDA mem_get_info + attention layers to compute block size
 def test_allocate_kv_cache_auto_sizing_positive_blocks(monkeypatch):
     import torch.nn as nn
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -1357,7 +1356,6 @@ def test_allocate_kv_cache_auto_sizing_positive_blocks(monkeypatch):
             return torch.float16
 
     runner = object.__new__(_Runner)
-    runner.model = nn.Module()
     runner.block_size = 16
 
     class _FakeConfig:
@@ -1367,6 +1365,16 @@ def test_allocate_kv_cache_auto_sizing_positive_blocks(monkeypatch):
     runner._config = _FakeConfig()
 
     os.environ.pop(model_runner._NUM_KVCACHE_BLOCKS_ENV, None)
+
+    class _FakeAttn(nn.Module):
+        is_causal = True
+        num_kv_heads = 2
+        head_dim = 64
+
+    monkeypatch.setattr(model_runner, "Attention", _FakeAttn)
+
+    runner.model = nn.Module()
+    runner.model.add_module("attn", _FakeAttn())
 
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda: (512 * 1024 * 1024, 1024 * 1024 * 1024))
     monkeypatch.setattr(

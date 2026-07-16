@@ -209,3 +209,4 @@ uv.lock
 # Opencode
 /.memory
 /models
+/.omo/

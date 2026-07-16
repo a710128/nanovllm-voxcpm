@@ -194,6 +194,26 @@ uv run python benchmark/bench_inference.py --model ~/VoxCPM1.5 --devices 0 --con
 
 See `benchmark/README.md` for more flags.
 
+## Manual GPU Smoke Suite
+
+Use `scripts/gpu_smoke.sh` for manual CUDA validation on an idle Linux GPU host. It checks CUDA,
+FlashAttention, Triton, device visibility, and then runs the curated single-GPU or two-rank TP tests.
+This suite requires real CUDA hardware and does not run in CI.
+
+```bash
+# Single-device smoke
+CUDA_VISIBLE_DEVICES=0 bash scripts/gpu_smoke.sh --single
+
+# Two-device tensor-parallel smoke
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/gpu_smoke.sh --tp
+
+# Intentional hidden-device diagnostic
+CUDA_VISIBLE_DEVICES="" bash scripts/gpu_smoke.sh --single
+
+# Intentional insufficient-GPU failure for TP
+CUDA_VISIBLE_DEVICES=0 bash scripts/gpu_smoke.sh --tp
+```
+
 ### Reference Results (RTX 4090)
 
 All reference numbers in this section are measured on NVIDIA GeForce RTX 4090 with `openbmb/VoxCPM2`.
