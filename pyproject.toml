@@ -46,6 +46,13 @@ fallback_version = "0.0.0"
 where = ["."]
 include = ["nanovllm_voxcpm*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "deployment/tests"]
+addopts = "--strict-markers --import-mode=importlib"
+markers = [
+    "gpu: requires a real CUDA GPU (deselect with -m 'not gpu')",
+]
+
 [tool.black]
 line-length = 120
 target-version = ['py310']

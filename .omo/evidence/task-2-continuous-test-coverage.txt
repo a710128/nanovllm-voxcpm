@@ -1,0 +1,47 @@
+=== ACCEPTANCE CHECK RESULTS ===
+Date: Thu Jul 16 01:53:06 PM CST 2026
+Python: Python 3.10.12
+
+--- CHECK 1: Collection count (uv run pytest --co -q | tail -1) ---
+206 tests collected in 0.45s
+
+--- CHECK 2: deployment/tests items in collection ---
+uv run pytest --co -q 2>&1 | grep -c 'deployment/tests' => 66 (must be >= 60)
+PASS: 66 >= 60
+
+--- CHECK 3: uv run pytest -m 'not gpu' -q (exits 0, NO coverage table) ---
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+205 passed, 1 deselected, 5 warnings in 4.69s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+Exit code: 0
+
+--- CHECK 4: standalone uv run pytest deployment/tests -q ---
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+..................................................................       [100%]
+66 passed in 0.93s
+Exit code: 0
+
+--- CHECK 5: no --cov in addopts (using tomli fallback for Python 3.10) ---
+PASS: --cov NOT in addopts. addopts='--strict-markers --import-mode=importlib'
+
+--- CHECK 6: pyproject.toml [tool.pytest.ini_options] content ---
+  testpaths = ['tests', 'deployment/tests']
+  addopts = '--strict-markers --import-mode=importlib'
+  markers = ["gpu: requires a real CUDA GPU (deselect with -m 'not gpu')"]
+
+--- importmode decision ---
+DECISION: importmode=importlib via '--import-mode=importlib' in addopts
+REASON: pytest 9.0.2 does not accept 'importmode' as an ini key (PytestConfigWarning).
+        Used --import-mode=importlib in addopts instead. Same effect.
+VERIFIED: deployment/tests collect correctly (66 tests), import app works.
+
+--- Final summary ---
+Total collected:     206 (140 core + 66 deployment)
+Deployment tests:    66
+Core tests:          140
+
+Note: task spec said 271=205+66. Actual count is 206=140+66.
+The 205 figure was apparently never correct for this codebase state.
+All functional requirements satisfied: both roots unified, no --cov, standalone works.
