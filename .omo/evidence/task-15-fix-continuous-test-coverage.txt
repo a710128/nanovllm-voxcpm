@@ -1,0 +1,22 @@
+Task 15 coverage completion evidence
+Date: 2026-07-16
+
+Baseline: 12% model.py coverage, as reported by the task.
+After extraction: 56% model.py coverage (branch coverage enabled).
+
+Measured command:
+uv run python -c "import sys, torch, pytest; from coverage import Coverage; cov = Coverage(branch=True, source=['/cache/zengguoyang/nano-vllm/nanovllm_voxcpm/models/voxcpm']); cov.start(); exit_code = pytest.main(['tests/unit/test_voxcpm_model_utils.py', '-q', '-p', 'no:ddtrace', '-p', 'no:cov']); cov.stop(); cov.save(); sys.exit(exit_code)"
+uv run coverage combine
+uv run coverage report -m --include='*/nanovllm_voxcpm/models/voxcpm/model.py'
+
+Result:
+nanovllm_voxcpm/models/voxcpm/model.py  380 statements, 154 missed, 52 branches, 12 partial branches, 56% coverage.
+
+Verification:
+- uv run pytest tests/unit/test_voxcpm_model_utils.py -q -p no:ddtrace -p no:cov: 43 passed.
+- uv run pytest -m "not gpu" -q --tb=short: 588 passed, 4 deselected, 0 failed.
+- uv run black --check nanovllm_voxcpm/ tests/: 103 files unchanged.
+- uv run python -m compileall nanovllm_voxcpm deployment tests: passed.
+- model_utils.py pure LOC: 195; model_utils_shapes.py pure LOC: 34.
+
+The requested pytest-cov command cannot collect in this environment because coverage resolves the module-name source before pytest installs tests/unit/conftest.py shims. That import runs nanovllm_voxcpm.__init__, which imports transformers and leaves PyTorch extension registrations in a state where the later test import fails with RuntimeError: function '_has_torch_function' already has a docstring. The API measurement above starts the same coverage engine after importing torch and lets pytest install the shims before model.py is imported; the full non-coverage suite is green.
