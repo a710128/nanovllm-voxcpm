@@ -1,0 +1,136 @@
+Task 7: Continuous Test Coverage — Diff-Cover Gate Evidence
+=============================================================
+Date: 2026-07-16
+Commit message: ci(cov): add file-path-scoped diff-cover gate (pinned) for CPU code
+
+## Changes Made
+
+File: .github/workflows/ci.yml
+- Added "Diff-cover gate (CPU-testable paths only)" step in the `coverage` job
+- Inserted after "Enforce coverage floor" step (line 221)
+- Conditional: `if: github.event_name == 'pull_request'` (skipped on push to main)
+- Uses `--compare-branch=origin/${{ github.base_ref }}` with existing `fetch-depth: 0` checkout
+- `--fail-under=80` gate on changed lines
+- 17 `--include` globs covering CPU-testable paths
+- Excludes: model.py, runner.py, attention.py kernel, kernel_utils.py (GPU-coupled)
+
+## Tool: diff-cover 9.7.2 (installed from pinned dep `diff-cover>=9,<10`)
+
+## YAML Validation
+Command: python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml').read()); print('YAML OK')"
+Result: YAML OK
+
+---
+
+## Local Validation Test Cases
+
+### Setup
+Branch: test-diffcover-gate (branched from main, deleted after tests)
+Coverage baseline: coverage.xml from `bash scripts/coverage.sh` (63% total, 206 tests passed)
+
+---
+
+### Test Case A — Included path, UNCOVERED function
+
+File modified: nanovllm_voxcpm/engine/block_manager.py
+Change: Added at end of file:
+
+    def _uncovered_test_function_for_gate_validation():
+        """Intentionally uncovered — tests diff-cover gate."""
+        return "This should be caught by diff-cover"
+
+Command:
+    uv run --no-sync diff-cover coverage.xml --compare-branch=main --fail-under=80 \
+        --include 'nanovllm_voxcpm/engine/**'
+
+Output:
+    Failure. Coverage is below 80%.
+    -------------
+    Diff Coverage
+    Diff: main...HEAD, staged and unstaged changes
+    -------------
+    nanovllm_voxcpm/engine/block_manager.py (0.0%): Missing lines 183,185
+    -------------
+    Total:   2 lines
+    Missing: 2 lines
+    Coverage: 0%
+    -------------
+
+EXIT_CODE: 1  ✅ EXPECTED (non-zero = gate blocks)
+
+---
+
+### Test Case B — Included path, COVERED function
+
+File modified: tests/unit/test_block_manager.py
+Change: Added test that imports and calls _uncovered_test_function_for_gate_validation
+
+Coverage re-run: bash scripts/coverage.sh (206 passed, 1 deselected)
+
+Command (same as Case A):
+    uv run --no-sync diff-cover coverage.xml --compare-branch=main --fail-under=80 \
+        --include 'nanovllm_voxcpm/engine/**'
+
+Output:
+    -------------
+    Diff Coverage
+    Diff: main...HEAD, staged and unstaged changes
+    -------------
+    nanovllm_voxcpm/engine/block_manager.py (100%)
+    -------------
+    Total:   2 lines
+    Missing: 0 lines
+    Coverage: 100%
+    -------------
+
+EXIT_CODE: 0  ✅ EXPECTED (zero = gate passes)
+
+---
+
+### Test Case C — EXCLUDED path (model.py), uncovered function
+
+File modified: nanovllm_voxcpm/models/voxcpm/model.py
+Change: Added at end of file:
+
+    def _gpu_only_uncovered_function_for_gate_validation():
+        return "This is in model.py (GPU-only, excluded from diff-cover gate)"
+
+Command (full include set as in ci.yml — model.py NOT in --include):
+    uv run --no-sync diff-cover coverage.xml --compare-branch=main --fail-under=80 \
+      --include 'nanovllm_voxcpm/engine/**' \
+      --include 'nanovllm_voxcpm/layers/layernorm.py' \
+      --include 'nanovllm_voxcpm/layers/activation.py' \
+      --include 'nanovllm_voxcpm/layers/sampler.py' \
+      --include 'nanovllm_voxcpm/layers/linear.py' \
+      --include 'nanovllm_voxcpm/layers/embed_head.py' \
+      --include 'nanovllm_voxcpm/layers/rotary_embedding.py' \
+      --include 'nanovllm_voxcpm/models/**/server.py' \
+      --include 'nanovllm_voxcpm/models/**/config.py' \
+      --include 'nanovllm_voxcpm/models/**/utils.py' \
+      --include 'nanovllm_voxcpm/models/**/lora_loader.py' \
+      --include 'nanovllm_voxcpm/models/**/model_utils.py' \
+      --include 'nanovllm_voxcpm/models/**/runner_utils.py' \
+      --include 'nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py' \
+      --include 'nanovllm_voxcpm/utils/**' \
+      --include 'deployment/app/**'
+
+Output:
+    -------------
+    Diff Coverage
+    Diff: main...HEAD, staged and unstaged changes
+    -------------
+    No lines with coverage information in this diff.
+    -------------
+
+EXIT_CODE: 0  ✅ EXPECTED (zero = GPU-only file not gated)
+
+---
+
+## Cleanup
+- Scratch branch test-diffcover-gate deleted after all 3 test cases verified
+- ci.yml restored to main branch (the diff-cover step is the only intended change)
+
+## Summary: ALL 3 GATE BEHAVIORS VERIFIED ✅
+A) Uncovered line in included path → exit 1 (gate blocks)
+B) Covered line in included path   → exit 0 (gate passes)
+C) Uncovered line in excluded path → exit 0 (GPU files not gated)

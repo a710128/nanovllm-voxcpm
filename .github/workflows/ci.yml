@@ -220,6 +220,32 @@ jobs:
         # floor = 62 (baseline 63% minus 1% flake buffer); raise after each climb wave
         run: uv run --no-sync coverage report --fail-under=62
 
+      - name: Diff-cover gate (CPU-testable paths only)
+        # Gates new/changed lines in CPU-testable modules only.
+        # GPU-only files (model.py, runner.py, attention.py kernel, kernel_utils.py) excluded.
+        # Rationale: never punish GPU-kernel authors for untestable kernel lines.
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run --no-sync diff-cover coverage.xml \
+            --compare-branch=origin/${{ github.base_ref }} \
+            --fail-under=80 \
+            --include 'nanovllm_voxcpm/engine/**' \
+            --include 'nanovllm_voxcpm/layers/layernorm.py' \
+            --include 'nanovllm_voxcpm/layers/activation.py' \
+            --include 'nanovllm_voxcpm/layers/sampler.py' \
+            --include 'nanovllm_voxcpm/layers/linear.py' \
+            --include 'nanovllm_voxcpm/layers/embed_head.py' \
+            --include 'nanovllm_voxcpm/layers/rotary_embedding.py' \
+            --include 'nanovllm_voxcpm/models/**/server.py' \
+            --include 'nanovllm_voxcpm/models/**/config.py' \
+            --include 'nanovllm_voxcpm/models/**/utils.py' \
+            --include 'nanovllm_voxcpm/models/**/lora_loader.py' \
+            --include 'nanovllm_voxcpm/models/**/model_utils.py' \
+            --include 'nanovllm_voxcpm/models/**/runner_utils.py' \
+            --include 'nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py' \
+            --include 'nanovllm_voxcpm/utils/**' \
+            --include 'deployment/app/**'
+
       - name: Write coverage summary
         if: always()
         run: |
