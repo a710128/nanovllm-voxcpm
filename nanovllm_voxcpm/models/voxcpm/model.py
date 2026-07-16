@@ -31,6 +31,14 @@ from nanovllm_voxcpm.models.voxcpm.model_utils import (
     sinusoidal_pos_emb,
     sway_sampling_schedule,
 )
+from nanovllm_voxcpm.models.voxcpm.model_utils_shapes import (
+    apply_classifier_free_guidance,
+    combine_feature_and_text_embeddings,
+    prepare_dit_decoder_input,
+    prepare_local_encoder_inputs,
+    quantize_scalar_latents,
+    select_prefill_hidden,
+)
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
     LM_LORA_DOMAIN,
@@ -551,7 +559,7 @@ class VoxCPMLocDiT(nn.Module):
         dt = self.delta_time_mlp(dt)
         t = t + dt
 
-        x = torch.cat([(mu + t).unsqueeze(1), cond, x], dim=1)
+        x = prepare_dit_decoder_input(x, cond, (mu + t).unsqueeze(1))
 
         position_ids = torch.arange(0, x.size(1), dtype=torch.long, device=x.device)
         hidden = self.decoder(x, position_ids)
@@ -666,13 +674,7 @@ class UnifiedCFM(torch.nn.Module):
 
                 dphi_dt = self.estimator(x_in, mu_in, t_in, cond_in, dt_in)
                 dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [x.size(0), x.size(0)], dim=0)
-
-                positive_flat = dphi_dt.view(b, -1)
-                negative_flat = cfg_dphi_dt.view(b, -1)
-                st_star = self.optimized_scale(positive_flat, negative_flat)
-                st_star = st_star.view(b, *([1] * (len(dphi_dt.shape) - 1)))
-
-                dphi_dt = cfg_dphi_dt * st_star + cfg_value[:, None, None] * (dphi_dt - cfg_dphi_dt * st_star)
+                dphi_dt = apply_classifier_free_guidance(dphi_dt, cfg_dphi_dt, cfg_value)
 
             x = x - dt * dphi_dt
             t = t - dt
@@ -699,9 +701,7 @@ class VoxCPMLocEnc(nn.Module):
         """
         T, P, D = x.size()
 
-        x = self.in_proj(x)
-        special_tokens = self.special_token[0].expand(T, 1, -1)
-        x = torch.cat([special_tokens, x], dim=1)
+        x = prepare_local_encoder_inputs(self.in_proj(x), self.special_token)
         position_ids = torch.arange(0, x.size(1), dtype=torch.long, device=x.device)
         outputs = self.encoder(x, position_ids)
         cls_output = outputs[:, 0, :]
@@ -721,11 +721,7 @@ class ScalarQuantizationLayer(nn.Module):
         self.out_proj = nn.Linear(latent_dim, out_dim)
 
     def forward(self, hidden):
-        hidden = self.in_proj(hidden)
-        hidden = torch.tanh(hidden)
-        hidden = torch.round(hidden * self.scale) / self.scale
-
-        return self.out_proj(hidden)
+        return self.out_proj(quantize_scalar_latents(self.in_proj(hidden), self.scale))
 
 
 class VoxCPMModel(nn.Module):
@@ -865,11 +861,7 @@ class VoxCPMModel(nn.Module):
         feat_embeds = torch.masked_fill(feat_embeds, feat_mask.unsqueeze(-1).logical_not(), 0)
 
         text_embeds = self.base_lm.embed_tokens(text_tokens)
-        combined_embeds = torch.where(
-            feat_mask.unsqueeze(-1),
-            feat_embeds,
-            text_embeds,
-        )
+        combined_embeds = combine_feature_and_text_embeddings(feat_embeds, text_embeds, feat_mask)
 
         enc_outputs = self.base_lm(combined_embeds, positions)
         enc_outputs = torch.where(
@@ -880,8 +872,7 @@ class VoxCPMModel(nn.Module):
 
         context = get_context()
         if context.is_prefill:
-            last_indices = context.cu_seqlens_q[1:] - 1
-            lm_hidden = enc_outputs[last_indices].contiguous()
+            lm_hidden = select_prefill_hidden(enc_outputs, context.cu_seqlens_q)
         else:
             lm_hidden = enc_outputs
 
@@ -892,7 +883,7 @@ class VoxCPMModel(nn.Module):
 
         if context.is_prefill:
             last_indices = context.cu_seqlens_q[1:] - 1
-            ralm_hidden = ralm_outputs[last_indices].contiguous()
+            ralm_hidden = select_prefill_hidden(ralm_outputs, context.cu_seqlens_q)
             # (b, P, D)
             prefix_feat_cond = feat[last_indices].contiguous()
         else:
