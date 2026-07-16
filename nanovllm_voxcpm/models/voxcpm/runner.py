@@ -7,6 +7,13 @@ from nanovllm_voxcpm.engine.model_runner import RunnerTask, BaseModelRunner
 from nanovllm_voxcpm.utils.loader import load_model
 from nanovllm_voxcpm.utils.seed import derive_step_seed
 from nanovllm_voxcpm.models.voxcpm.model import VoxCPMModel, VoxCPMConfig
+from nanovllm_voxcpm.models.voxcpm.runner_utils import (
+    assemble_batch_inputs,
+    assemble_run_outputs,
+    collect_seeded_rows,
+    compute_pad_lengths,
+    slice_waveforms,
+)
 from nanovllm_voxcpm.layers.audio_vae import AudioVAE
 import numpy as np
 import os
@@ -107,42 +114,27 @@ class VoxCPMRunner(BaseModelRunner):
 
     def run(self, seqs: list[RunnerTask[VoxCPMPayload]], is_prefill: bool):
         positions = self.prepare_prefill_context(seqs) if is_prefill else self.prepare_decode_context(seqs)
-        inputs = {
-            "positions": positions,
-        }
+        inputs = {"positions": positions}
 
-        text_tokens = []
-        feats = []
-        feat_masks = []
-        temperatures = []
-        cfg_values = []
         for seq in seqs:
             payload: VoxCPMPayload = seq.custom_payload
             assert payload.text_tokens.shape[0] == payload.feats.shape[0]
             assert payload.text_tokens.shape[0] == payload.feat_masks.shape[0]
 
-            text_tokens.append(payload.text_tokens)
-            feats.append(payload.feats)
-            feat_masks.append(payload.feat_masks)
+        text_tokens_np, feats_np, feat_masks_np, temperatures, cfg_values = assemble_batch_inputs(seqs)
 
-            temperatures.append(payload.temperature)
-            cfg_values.append(payload.cfg_value)
-
-        inputs["text_tokens"] = torch.from_numpy(np.concatenate(text_tokens, axis=0)).cuda(non_blocking=True)
-        inputs["feat"] = torch.from_numpy(np.concatenate(feats, axis=0)).cuda(non_blocking=True).to(self.dtype)
-        inputs["feat_mask"] = torch.from_numpy(np.concatenate(feat_masks, axis=0)).cuda(non_blocking=True)
+        inputs["text_tokens"] = torch.from_numpy(text_tokens_np).cuda(non_blocking=True)
+        inputs["feat"] = torch.from_numpy(feats_np).cuda(non_blocking=True).to(self.dtype)
+        inputs["feat_mask"] = torch.from_numpy(feat_masks_np).cuda(non_blocking=True)
         inputs["temperature"] = (
             torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).to(self.dtype)
         )
         inputs["cfg_value"] = (
             torch.tensor(cfg_values, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).to(self.dtype)
         )
+
         bsz = len(seqs)
-        seeded_rows = [
-            (i, int(seq.custom_payload.seed), seq.custom_payload.seed_step)
-            for i, seq in enumerate(seqs)
-            if seq.custom_payload.seed is not None and seq.custom_payload.seed >= 0
-        ]
+        seeded_rows = collect_seeded_rows(seqs)
         if len(seeded_rows) == bsz:
             z_noise = torch.empty((bsz, self.feat_dim, self.patch_size), dtype=self.dtype, device="cuda")
         else:
@@ -159,12 +151,7 @@ class VoxCPMRunner(BaseModelRunner):
         outputs = self.run_model(inputs, is_prefill)
         latents = outputs["latents"]
 
-        pad_lengths = []
-        for i in range(len(seqs)):
-            if seqs[i].custom_payload.padding_decode is not None:
-                pad_lengths.append(seqs[i].custom_payload.padding_decode.shape[0])
-            else:
-                pad_lengths.append(0)
+        pad_lengths = compute_pad_lengths(seqs)
         max_pad_decode = max(pad_lengths) + self.patch_size
 
         vae_decoder_inputs = torch.zeros(len(seqs), max_pad_decode, self.feat_dim, dtype=torch.float32, device="cuda")
@@ -177,27 +164,8 @@ class VoxCPMRunner(BaseModelRunner):
             vae_decoder_inputs[i, pad_len : pad_len + self.patch_size] = latents[i].to(torch.float32)
 
         vae_decoder_outputs = self.vae.decode(vae_decoder_inputs.permute(0, 2, 1))[:, 0, :].cpu().numpy()
-        stop_flag = outputs["stop_flag"].cpu().tolist()
-
-        ret_waveforms = []
-        for i in range(len(seqs)):
-            pad_len = pad_lengths[i]
-            ret_waveforms.append(
-                vae_decoder_outputs[
-                    i,
-                    pad_len * self.vae.chunk_size : (pad_len + self.patch_size) * self.vae.chunk_size,
-                ]
-            )
-
-        ret = []
+        stop_flags = outputs["stop_flag"].cpu().tolist()
+        ret_waveforms = slice_waveforms(vae_decoder_outputs, pad_lengths, self.patch_size, self.vae.chunk_size)
         np_latents = latents.to(torch.float32).cpu().numpy()
-        for i in range(len(seqs)):
-            ret.append(
-                {
-                    "latents": np_latents[i],
-                    "stop_flag": stop_flag[i],
-                    "waveforms": ret_waveforms[i],
-                }
-            )
 
-        return ret
+        return assemble_run_outputs(np_latents, stop_flags, ret_waveforms)

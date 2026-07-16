@@ -16,6 +16,19 @@ from nanovllm_voxcpm.layers.lora import (
     LoRARowParallelLinear,
 )
 from nanovllm_voxcpm.models.voxcpm2.config import CfmConfig, LoRAConfig, MiniCPM4Config, VoxCPM2Config
+from nanovllm_voxcpm.models.voxcpm2.model_utils import (
+    apply_rotary_emb,
+    build_cfm_t_span,
+    build_rope_cos_sin_cache,
+    build_rope_inv_freq,
+    compute_attention_sizes,
+    compute_optimized_scale,
+    compute_rope_scaling_factor,
+    compute_zero_init_steps,
+    parse_gate_up_lora_targets,
+    parse_qkv_lora_targets,
+    sinusoidal_pos_emb,
+)
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
     LM_LORA_DOMAIN,
@@ -43,36 +56,29 @@ class MiniCPMLongRoPE(nn.Module):
         self.short_factor = short_factor or [1.0] * (head_size // 2)
         self.long_factor = long_factor or [1.0] * (head_size // 2)
         self.original_max_position_embeddings = original_max_position_embeddings or max_position_embeddings
-        scale = max_position_embeddings / self.original_max_position_embeddings
-        self.scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float() / self.dim))
+        self.scaling_factor = compute_rope_scaling_factor(
+            self.max_position_embeddings, self.original_max_position_embeddings
+        )
+        inv_freq = build_rope_inv_freq(self.dim, self.base)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self._set_cos_sin_cache(max_position_embeddings, self.inv_freq.device, torch.float32)
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        ext_factors = (
-            torch.tensor(self.long_factor, dtype=torch.float32, device=device)
-            if seq_len > self.original_max_position_embeddings
-            else torch.tensor(self.short_factor, dtype=torch.float32, device=device)
+        cos_cache, sin_cache = build_rope_cos_sin_cache(
+            seq_len=seq_len,
+            inv_freq=self.inv_freq.to(device=device),
+            scaling_factor=self.scaling_factor,
+            short_factor=self.short_factor,
+            long_factor=self.long_factor,
+            original_max_position_embeddings=self.original_max_position_embeddings,
+            dtype=dtype,
         )
-        freqs = torch.mul(
-            torch.outer(t, 1.0 / ext_factors).to(device=device), self.inv_freq.to(device=device).to(dtype)
-        )
-        emb = torch.cat((freqs, freqs), dim=-1)
-        self.register_buffer("cos_cached", emb.cos().to(dtype) * self.scaling_factor, persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype) * self.scaling_factor, persistent=False)
+        self.register_buffer("cos_cached", cos_cache, persistent=False)
+        self.register_buffer("sin_cached", sin_cache, persistent=False)
 
     def _apply_rotary_emb(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        cos = cos.unsqueeze(1)
-        sin = sin.unsqueeze(1)
-        orig_dtype = x.dtype
-        x = x.to(torch.float32)
-        x1, x2 = torch.chunk(x, 2, dim=-1)
-        rotate_half_x = torch.cat((-x2, x1), dim=-1)
-        result = x * cos.to(torch.float32) + rotate_half_x * sin.to(torch.float32)
-        return result.to(orig_dtype)
+        return apply_rotary_emb(x, cos, sin)
 
     def forward(
         self, positions: torch.Tensor, query: torch.Tensor, key: torch.Tensor
@@ -121,12 +127,13 @@ class Cpm4Attention(nn.Module):
         tp_size = get_tp_world_size()
         self.total_num_heads = num_heads
         self.total_num_kv_heads = num_kv_heads
-        self.num_heads = self.total_num_heads // tp_size
-        self.num_kv_heads = self.total_num_kv_heads // tp_size
-        self.head_dim = head_dim or hidden_size // self.total_num_heads
-        self.q_size = self.num_heads * self.head_dim
-        self.kv_size = self.num_kv_heads * self.head_dim
-        self.scaling = self.head_dim**-0.5
+        sizes = compute_attention_sizes(hidden_size, num_heads, num_kv_heads, head_dim, tp_size)
+        self.num_heads = sizes["num_heads"]
+        self.num_kv_heads = sizes["num_kv_heads"]
+        self.head_dim = sizes["head_dim"]
+        self.q_size = sizes["q_size"]
+        self.kv_size = sizes["kv_size"]
+        self.scaling = sizes["scaling"]
         self.max_position = max_position
         self.use_rope = use_rope
         self.apply_qk_norm = apply_qk_norm
@@ -135,7 +142,7 @@ class Cpm4Attention(nn.Module):
         max_loras = lora_config.max_loras if lora_config else 1
         max_lora_rank = lora_config.max_lora_rank if lora_config else 0
         lora_targets = lora_config.target_modules_lm if lora_config else []
-        qkv_lora_targets = [t.replace("_proj", "") for t in lora_targets if t in ["q_proj", "k_proj", "v_proj"]]
+        qkv_lora_targets = parse_qkv_lora_targets(lora_targets)
         if max_lora_rank > 0 and qkv_lora_targets:
             self.qkv_proj = LoRAQKVParallelLinear(
                 hidden_size,
@@ -220,11 +227,7 @@ class Cpm4MLP(nn.Module):
         max_loras = lora_config.max_loras if lora_config else 1
         max_lora_rank = lora_config.max_lora_rank if lora_config else 0
         lora_targets = lora_config.target_modules_lm if lora_config else []
-        gate_up_lora_targets = []
-        if "gate_proj" in lora_targets:
-            gate_up_lora_targets.append(0)
-        if "up_proj" in lora_targets:
-            gate_up_lora_targets.append(1)
+        gate_up_lora_targets = parse_gate_up_lora_targets(lora_targets)
         if max_lora_rank > 0 and gate_up_lora_targets:
             self.gate_up_proj = LoRAMergedColumnParallelLinear(
                 hidden_size,
@@ -336,13 +339,7 @@ class SinusoidalPosEmb(nn.Module):
         self.dim = dim
 
     def forward(self, x, scale=1000):
-        if x.ndim < 1:
-            x = x.unsqueeze(0)
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=x.dtype, device=x.device) * -emb)
-        emb = scale * x.unsqueeze(1) * emb.unsqueeze(0)
-        return torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return sinusoidal_pos_emb(x, self.dim, scale=float(scale))
 
 
 class TimestepEmbedding(nn.Module):
@@ -440,14 +437,11 @@ class UnifiedCFM(nn.Module):
             z = torch.randn((bsz, self.in_channels, self.patch_size), device=mu.device, dtype=mu.dtype)
 
         z = z * temperature[:, None, None]
-        t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
-        t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
+        t_span = build_cfm_t_span(self.inference_timesteps, device=mu.device).to(dtype=mu.dtype)
         return self.solve_euler(z, t_span=t_span, mu=mu, cond=cond, cfg_value=cfg_value)
 
     def optimized_scale(self, positive_flat, negative_flat):
-        dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
-        squared_norm = torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
-        return dot_product / squared_norm
+        return compute_optimized_scale(positive_flat, negative_flat)
 
     def solve_euler(
         self,
@@ -458,7 +452,7 @@ class UnifiedCFM(nn.Module):
         cfg_value: torch.Tensor,
     ):
         t, dt = t_span[0], t_span[0] - t_span[1]
-        zero_init_steps = max(1, int(len(t_span) * 0.04))
+        zero_init_steps = compute_zero_init_steps(len(t_span))
         bsz = x.size(0)
         x_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
         mu_in = torch.empty([2 * bsz, mu.size(1)], device=x.device, dtype=x.dtype)

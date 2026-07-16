@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import nn
 from typing import Optional
@@ -6,24 +8,32 @@ from nanovllm_voxcpm.layers.activation import SiluAndMul
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.layers.layernorm import RMSNorm
 from nanovllm_voxcpm.layers.linear import (
-    QKVParallelLinear,
     MergedColumnParallelLinear,
+    QKVParallelLinear,
     RowParallelLinear,
 )
 from nanovllm_voxcpm.layers.lora import (
-    LoRAQKVParallelLinear,
-    LoRAMergedColumnParallelLinear,
-    LoRARowParallelLinear,
     LoRALinear,
+    LoRAMergedColumnParallelLinear,
+    LoRAQKVParallelLinear,
+    LoRARowParallelLinear,
 )
 from nanovllm_voxcpm.layers.embed_head import VocabParallelEmbedding
-import math
-
 from nanovllm_voxcpm.models.voxcpm.config import (
-    MiniCPM4Config,
     CfmConfig,
-    VoxCPMConfig,
     LoRAConfig,
+    MiniCPM4Config,
+    VoxCPMConfig,
+)
+from nanovllm_voxcpm.models.voxcpm.model_utils import (
+    apply_rotary_emb_tokens,
+    apply_rotary_pos_emb,
+    compute_longrope_freqs,
+    compute_longrope_scaling_factor,
+    optimized_scale,
+    rotate_half,
+    sinusoidal_pos_emb,
+    sway_sampling_schedule,
 )
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
@@ -32,27 +42,6 @@ from nanovllm_voxcpm.utils.context import (
     get_context,
 )
 from nanovllm_voxcpm.utils.distributed import get_tp_world_size
-
-
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    This is equivalent to the MiniCPM modeling implementation.
-    """
-    orig_dtype = k.dtype
-    cos = cos[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids].unsqueeze(unsqueeze_dim)  # [bs, 1, seq_len, dim]
-    q_fp32 = q.to(dtype=torch.float32, device=q.device)
-    k_fp32 = k.to(dtype=torch.float32, device=k.device)
-    q_embed = (q_fp32 * cos) + (rotate_half(q_fp32) * sin)
-    k_embed = (k_fp32 * cos) + (rotate_half(k_fp32) * sin)
-    return q_embed.to(dtype=orig_dtype), k_embed.to(dtype=orig_dtype)
 
 
 class MiniCPMLongRoPE(nn.Module):
@@ -77,8 +66,10 @@ class MiniCPMLongRoPE(nn.Module):
         self.original_max_position_embeddings = original_max_position_embeddings or max_position_embeddings
 
         # Calculate scaling factor (kept for compatibility, but not used to scale cos/sin amplitude)
-        scale = max_position_embeddings / self.original_max_position_embeddings
-        self.scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.original_max_position_embeddings))
+        self.scaling_factor = compute_longrope_scaling_factor(
+            max_position_embeddings=self.max_position_embeddings,
+            original_max_position_embeddings=self.original_max_position_embeddings,
+        )
 
         # Create base inverse frequencies
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float() / self.dim))
@@ -89,22 +80,16 @@ class MiniCPMLongRoPE(nn.Module):
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
 
         if seq_len > self.original_max_position_embeddings:
             ext_factors = torch.tensor(self.long_factor, dtype=torch.float32, device=device)
         else:
             ext_factors = torch.tensor(self.short_factor, dtype=torch.float32, device=device)
 
-        freqs = torch.mul(
-            torch.outer(t, 1.0 / ext_factors).to(device=device),
-            self.inv_freq.to(device=device).to(dtype),
-        )
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
         # Do NOT scale cos/sin amplitude; only frequency is scaled by ext_factors
-        self.register_buffer("cos_cached", emb.cos().to(dtype) * self.scaling_factor, persistent=False)
-        self.register_buffer("sin_cached", emb.sin().to(dtype) * self.scaling_factor, persistent=False)
+        cos_cache, sin_cache = compute_longrope_freqs(seq_len, self.inv_freq, ext_factors, dtype, device)
+        self.register_buffer("cos_cached", cos_cache * self.scaling_factor, persistent=False)
+        self.register_buffer("sin_cached", sin_cache * self.scaling_factor, persistent=False)
 
     def forward(
         self,
@@ -124,33 +109,13 @@ class MiniCPMLongRoPE(nn.Module):
         # Apply rotary embedding using the original nano-vllm method but with corrected math
         query_shape = query.shape
         query = query.reshape(num_tokens, -1, self.dim)
-        query = self._apply_rotary_emb(query, cos, sin).view(query_shape)
+        query = apply_rotary_emb_tokens(query, cos, sin).view(query_shape)
 
         key_shape = key.shape
         key = key.reshape(num_tokens, -1, self.dim)
-        key = self._apply_rotary_emb(key, cos, sin).view(key_shape)
+        key = apply_rotary_emb_tokens(key, cos, sin).view(key_shape)
 
         return query, key
-
-    def _apply_rotary_emb(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        """Apply rotary embedding with corrected math matching modeling_minicpm.py"""
-        # x: [num_tokens, num_heads, head_dim]
-        # cos/sin: [num_tokens, head_dim] from _set_cos_sin_cache (already repeated)
-
-        cos = cos.unsqueeze(1)  # [num_tokens, 1, head_dim] to broadcast over heads
-        sin = sin.unsqueeze(1)  # [num_tokens, 1, head_dim] to broadcast over heads
-
-        orig_dtype = x.dtype
-        x = x.to(torch.float32)
-        cos = cos.to(torch.float32)
-        sin = sin.to(torch.float32)
-
-        # Apply standard RoPE: (x * cos) + (rotate_half(x) * sin)
-        x1, x2 = torch.chunk(x, 2, dim=-1)
-        rotate_half_x = torch.cat((-x2, x1), dim=-1)
-
-        result = x * cos + rotate_half_x * sin
-        return result.to(orig_dtype)
 
 
 def get_cpm4_rope(
@@ -492,15 +457,7 @@ class SinusoidalPosEmb(torch.nn.Module):
         assert self.dim % 2 == 0, "SinusoidalPosEmb requires dim to be even"
 
     def forward(self, x, scale=1000):
-        if x.ndim < 1:
-            x = x.unsqueeze(0)
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, dtype=x.dtype, device=device) * -emb)
-        emb = scale * x.unsqueeze(1) * emb.unsqueeze(0)
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
+        return sinusoidal_pos_emb(x, dim=self.dim, scale=scale)
 
 
 class TimestepEmbedding(nn.Module):
@@ -662,18 +619,12 @@ class UnifiedCFM(torch.nn.Module):
             z = torch.randn((b, self.in_channels, t), device=mu.device, dtype=mu.dtype)
 
         z = z * temperature[:, None, None]
-        t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
-        # Sway sampling strategy
-        t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
+        t_span = sway_sampling_schedule(self.inference_timesteps, device=mu.device, dtype=mu.dtype)
 
         return self.solve_euler(z, t_span=t_span, mu=mu, cond=cond, cfg_value=cfg_value)
 
     def optimized_scale(self, positive_flat, negative_flat):
-        dot_product = torch.sum(positive_flat * negative_flat, dim=1, keepdim=True)
-        squared_norm = torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
-
-        st_star = dot_product / squared_norm
-        return st_star
+        return optimized_scale(positive_flat, negative_flat)
 
     def solve_euler(
         self,

@@ -3,8 +3,6 @@ import os
 import sys
 import types
 from pathlib import Path
-import importlib
-import importlib.util
 
 import pytest
 
@@ -12,6 +10,13 @@ import pytest
 DEPLOYMENT_DIR = Path(__file__).resolve().parents[1]
 if str(DEPLOYMENT_DIR) not in sys.path:
     sys.path.insert(0, str(DEPLOYMENT_DIR))
+
+# Ensure repo root is on sys.path so `tests._shims` is importable.
+_REPO_ROOT = str(DEPLOYMENT_DIR.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from tests._shims import install_gpu_shims  # noqa: E402
 
 
 # Skip the entire deployment test suite if optional runtime deps are missing.
@@ -31,78 +36,11 @@ except Exception:
     pass
 
 
-def _ensure_module(name: str) -> types.ModuleType:
-    mod = sys.modules.get(name)
-    if mod is None:
-        mod = types.ModuleType(name)
-        sys.modules[name] = mod
-    return mod
-
-
-def _module_available(name: str) -> bool:
-    """Return True only if the module can be imported.
-
-    Some GPU-centric deps may be present but fail at import time (e.g. missing
-    CUDA extensions). For deployment tests we treat those as unavailable and
-    install lightweight shims so HTTP-layer tests can still run.
-    """
-
-    try:
-        if importlib.util.find_spec(name) is None:
-            return False
-    except (ModuleNotFoundError, AttributeError, ValueError):
-        return False
-
-    try:
-        importlib.import_module(name)
-        return True
-    except Exception:
-        for mod_name in list(sys.modules.keys()):
-            if mod_name == name or mod_name.startswith(name + "."):
-                sys.modules.pop(mod_name, None)
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Test-time dependency shims
 # ---------------------------------------------------------------------------
 
-# nanovllm_voxcpm/__init__.py imports llm, which checks flash-attn on import.
-# In CPU-only/local dev envs flash-attn can be partially installed and crash.
-if not _module_available("flash_attn"):
-    flash_attn = _ensure_module("flash_attn")
-
-    def _unavailable(*args, **kwargs):  # pragma: no cover
-        raise RuntimeError("flash_attn is not available in deployment tests")
-
-    setattr(flash_attn, "flash_attn_varlen_func", _unavailable)
-    setattr(flash_attn, "flash_attn_with_kvcache", _unavailable)
-    setattr(flash_attn, "flash_attn_func", _unavailable)
-
-if not _module_available("triton"):
-    triton = _ensure_module("triton")
-
-    def jit(fn=None, **kwargs):  # pragma: no cover
-        if fn is None:
-            return lambda f: f
-        return fn
-
-    setattr(triton, "jit", jit)
-
-if not _module_available("triton.language"):
-    tl = _ensure_module("triton.language")
-    setattr(tl, "constexpr", object())
-
-    triton = _ensure_module("triton")
-    setattr(triton, "language", tl)
-
-if not _module_available("huggingface_hub"):
-    hub = _ensure_module("huggingface_hub")
-
-    def snapshot_download(*args, **kwargs):  # pragma: no cover
-        raise RuntimeError("huggingface_hub is not available in deployment tests")
-
-    setattr(hub, "snapshot_download", snapshot_download)
+install_gpu_shims()
 
 
 class FakeServerPool:
