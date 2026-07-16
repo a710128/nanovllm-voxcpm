@@ -1,0 +1,26 @@
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+s                                                                        [100%]
+1 skipped, 205 deselected in 0.47s
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+........................................................................ [ 35%]
+........................................................................ [ 70%]
+.............................................................            [100%]
+=============================== warnings summary ===============================
+tests/unit/test_core_server_threadpool_starvation.py::test_voxcpm_control_plane_survives_default_executor_starvation
+  /cache/zengguoyang/nano-vllm/.venv/lib/python3.10/site-packages/torch/jit/_script.py:1480: DeprecationWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/unit/test_voxcpm2_chunk_sizes.py::test_audio_vae_v2_exposes_encoder_and_decoder_chunk_sizes
+tests/unit/test_voxcpm2_chunk_sizes.py::test_audio_vae_v2_uses_fixed_batch_shaped_sr_idx
+  /cache/zengguoyang/nano-vllm/.venv/lib/python3.10/site-packages/torch/nn/utils/weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.
+    WeightNorm.apply(module, name, dim)
+
+tests/unit/test_voxcpm2_server_encode_latents.py::test_encode_latents_uses_librosa_resample
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/unit/test_voxcpm2_server_encode_latents.py::test_encode_latents_uses_librosa_resample
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+205 passed, 1 deselected, 5 warnings in 4.86s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
