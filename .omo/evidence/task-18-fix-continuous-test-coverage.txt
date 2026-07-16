@@ -1,0 +1,67 @@
+Task 18 fix: VoxCPM2 model.py continuous test coverage
+Date: 2026-07-16
+
+Baseline
+--------
+Command:
+  uv run pytest tests/unit/ --cov=nanovllm_voxcpm/models/voxcpm2 --cov-report=term -m "not gpu" -q
+Result:
+  nanovllm_voxcpm/models/voxcpm2/model.py  327 statements  149 missed  52%
+
+Region classification
+---------------------
+- CPU-reachable: LongRoPE cache/application and shape handling, attention/MLP configuration and LoRA target selection, decoder/model forwarding shells, timestep/scalar projection wrappers, LocDiT/LocEnc tensor shaping, CFM time schedule and Euler integration, prefill/decode tensor routing.
+- GPU-coupled: attention kernel execution, tensor-parallel projection execution, full decoder attention/MLP math, and end-to-end VoxCPM2 feature generation.
+- Extracted in this task: CFM schedule, optimized CFG scale, zero-init step calculation, and the complete Euler integration loop into model_utils_cfm.py.
+
+Final coverage
+--------------
+Command:
+  uv run pytest tests/unit/ --cov=nanovllm_voxcpm/models/voxcpm2 --cov-report=term -m "not gpu" -q
+Result:
+  nanovllm_voxcpm/models/voxcpm2/model.py  298 statements  102 missed  62%
+  nanovllm_voxcpm/models/voxcpm2/model_utils_cfm.py  61 statements  0 missed  99%
+  528 passed, 4 deselected
+
+Focused tests
+-------------
+Command:
+  uv run pytest tests/unit/test_voxcpm2_model_utils.py tests/unit/test_voxcpm2_model_utils_rope.py tests/unit/test_voxcpm2_model_utils_config.py tests/unit/test_voxcpm2_euler_prealloc.py -q
+Result:
+  69 passed
+
+Full non-GPU suite
+------------------
+Command:
+  uv run pytest -m "not gpu" -q
+Result:
+  594 passed, 4 deselected
+
+Formatting and static checks
+----------------------------
+- uv run black --check .
+  Result: 145 files would be left unchanged.
+- uv run mypy nanovllm_voxcpm/models/voxcpm2/model.py nanovllm_voxcpm/models/voxcpm2/model_utils.py nanovllm_voxcpm/models/voxcpm2/model_utils_cfm.py
+  Result: Success: no issues found in 3 source files.
+- uv run ruff check nanovllm_voxcpm/models/voxcpm2/model.py nanovllm_voxcpm/models/voxcpm2/model_utils.py nanovllm_voxcpm/models/voxcpm2/model_utils_cfm.py
+  Result: All checks passed.
+- uv run python -m compileall nanovllm_voxcpm deployment tests
+  Result: exit code 0.
+
+File-size ceiling
+-----------------
+Pure LOC after extraction and test split:
+  model_utils.py: 134
+  model_utils_cfm.py: 74
+  model_utils_rope.py: 61
+  test_voxcpm2_model_utils.py: 225
+  test_voxcpm2_model_utils_rope.py: 198
+  test_voxcpm2_model_utils_config.py: 59
+
+Known measurement-tool issue
+----------------------------
+The requested dotted target command:
+  uv run pytest tests/unit/ --cov=nanovllm_voxcpm.models.voxcpm2.model --cov-report=term -m "not gpu" -q
+fails before test collection in this environment. pytest-cov/coverage 7.13.5 imports the dotted source target and then unloads it; Torch 2.10 cannot be initialized a second time and raises:
+  RuntimeError: function '_has_torch_function' already has a docstring
+Using the package directory as the coverage source avoids source-target import side effects and reports coverage for the same model.py file, shown above at 62%.
