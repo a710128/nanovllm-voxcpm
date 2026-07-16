@@ -15,6 +15,8 @@ import os
 import sys
 import types
 
+import pytest
+
 
 def _ensure_module(name: str) -> types.ModuleType:
     mod = sys.modules.get(name)
@@ -54,11 +56,12 @@ def _module_available(name: str) -> bool:
         return False
 
 
-def pytest_configure():
+def pytest_configure(config):
     # Unit tests should run without requiring a C++ toolchain. Some small layers
     # are decorated with `@torch.compile`, which would otherwise trigger
     # TorchDynamo/Inductor and attempt to build extensions.
     os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+    config.addinivalue_line("markers", "gpu: tests that require a real CUDA GPU")
 
     try:  # pragma: no cover
         import torch._dynamo
@@ -125,3 +128,22 @@ def pytest_configure():
             pass
 
         setattr(pyd, "BaseModel", BaseModel)
+
+
+def pytest_collection_modifyitems(config, items):
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    cuda_available = False
+    if _module_available("torch"):
+        import torch
+
+        cuda_available = torch.cuda.is_available()
+
+    should_skip = not cuda_available or cuda_visible == ""
+
+    if should_skip:
+        skip_gpu = pytest.mark.skip(
+            reason="requires a real CUDA GPU (CUDA_VISIBLE_DEVICES is empty or no CUDA available)",
+        )
+        for item in items:
+            if item.get_closest_marker("gpu"):
+                item.add_marker(skip_gpu)
