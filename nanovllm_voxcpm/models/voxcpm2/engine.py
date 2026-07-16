@@ -23,6 +23,8 @@ class VoxCPM2SeqPayload:
     cfg_value: float
     decode_pad: np.ndarray | None = None
     max_generate_length: int | None = None
+    seed: int | None = None
+    seed_step: int = 0
 
 
 class VoxCPM2Engine(LLMEngineBase):
@@ -61,6 +63,8 @@ class VoxCPM2Engine(LLMEngineBase):
                     temperature=seq.custom_payload.temperature,
                     cfg_value=seq.custom_payload.cfg_value,
                     padding_decode=seq.custom_payload.decode_pad,
+                    seed=seq.custom_payload.seed,
+                    seed_step=seq.custom_payload.seed_step,
                 ),
                 adapter_id=seq.adapter_id,
             )
@@ -77,6 +81,8 @@ class VoxCPM2Engine(LLMEngineBase):
                 temperature=seq.custom_payload.temperature,
                 cfg_value=seq.custom_payload.cfg_value,
                 padding_decode=seq.custom_payload.decode_pad,
+                seed=seq.custom_payload.seed,
+                seed_step=seq.custom_payload.seed_step,
             ),
             adapter_id=seq.adapter_id,
         )
@@ -90,6 +96,8 @@ class VoxCPM2Engine(LLMEngineBase):
         seq.custom_payload.feats.append(latents[None])
         seq.custom_payload.text_tokens.append(0)
         seq.custom_payload.feat_masks.append(True)
+        if seq.custom_payload.seed is not None and seq.custom_payload.seed >= 0:
+            seq.custom_payload.seed_step += 1
         seq.custom_payload.generated_waveforms.append(waveforms)
 
         latents = latents.reshape(-1, self.feat_dim)
@@ -119,6 +127,7 @@ class VoxCPM2Engine(LLMEngineBase):
         temperature: float = 1.0,
         cfg_value: float = 1.0,
         lora_name: str | None = None,
+        seed: int | None = None,
     ):
         if max_generate_length < 1:
             raise ValueError(f"max_generate_length must be >= 1, got {max_generate_length}")
@@ -189,6 +198,8 @@ class VoxCPM2Engine(LLMEngineBase):
                 cfg_value=cfg_value,
                 max_generate_length=max_generate_length,
                 generated_waveforms=[],
+                seed=seed,
+                seed_step=0,
             ),
             lora_name=lora_name,
             adapter_id=adapter_id,

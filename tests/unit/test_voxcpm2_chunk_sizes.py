@@ -74,6 +74,8 @@ def test_voxcpm2_runner_slices_decoded_waveform_with_decoder_chunk_size(monkeypa
 
     original_zeros = torch.zeros
     original_tensor = torch.tensor
+    original_randn = torch.randn
+    randn_shapes = []
 
     def _cpu_zeros(*args, **kwargs):
         kwargs.pop("device", None)
@@ -83,9 +85,15 @@ def test_voxcpm2_runner_slices_decoded_waveform_with_decoder_chunk_size(monkeypa
         kwargs.pop("pin_memory", None)
         return original_tensor(*args, **kwargs)
 
+    def _cpu_randn(*args, **kwargs):
+        kwargs.pop("device", None)
+        randn_shapes.append(args[0])
+        return original_randn(*args, **kwargs)
+
     monkeypatch.setattr(torch.Tensor, "cuda", lambda self, non_blocking=True: self, raising=False)
     monkeypatch.setattr(torch, "zeros", _cpu_zeros)
     monkeypatch.setattr(torch, "tensor", _cpu_tensor)
+    monkeypatch.setattr(torch, "randn", _cpu_randn)
 
     runner = VoxCPM2Runner.__new__(VoxCPM2Runner)
     runner.patch_size = 4
@@ -133,4 +141,5 @@ def test_voxcpm2_runner_slices_decoded_waveform_with_decoder_chunk_size(monkeypa
 
     outputs = runner.run([seq], is_prefill=False)
 
+    assert randn_shapes == [(1, runner.feat_dim, runner.patch_size)]
     assert outputs[0]["waveforms"].tolist() == list(range(6, 18))

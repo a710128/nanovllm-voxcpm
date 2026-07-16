@@ -130,6 +130,7 @@ async def _consume_one(
     cfg_value: float,
     scheduled_t: float,
     lora_name: str | None,
+    seed: int | None,
 ) -> OneRequestResult:
     started_t = time.perf_counter()
     first_chunk_t: float | None = None
@@ -142,6 +143,7 @@ async def _consume_one(
             temperature=temperature,
             cfg_value=cfg_value,
             lora_name=lora_name,
+            seed=seed,
         ):
             if first_chunk_t is None:
                 first_chunk_t = time.perf_counter()
@@ -320,6 +322,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-generate-length", type=int, default=8000)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--cfg-value", type=float, default=2.0)
+    p.add_argument("--seed", type=int, default=None, help="Optional: fixed seed for generation")
     add_lora_args(p)
 
     p.add_argument(
@@ -432,6 +435,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                             "max_generate_length": int(args.max_generate_length),
                             "temperature": float(args.temperature),
                             "cfg_value": float(args.cfg_value),
+                            "seed": args.seed,
                         },
                         lora_name,
                     ),
@@ -460,6 +464,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                 cfg_value=args.cfg_value,
                 scheduled_t=scheduled_t,
                 lora_name=choose_lora_name(lora_names, lora_rng),
+                seed=args.seed,
             )
         finally:
             inflight.release()
@@ -516,6 +521,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                                 "max_generate_length": int(max(1, min(args.max_generate_length, 500))),
                                 "temperature": float(args.temperature),
                                 "cfg_value": float(args.cfg_value),
+                                "seed": args.seed,
                             },
                             lora_name,
                         ),
@@ -532,6 +538,7 @@ async def async_main(argv: list[str] | None = None) -> int:
                         cfg_value=args.cfg_value,
                         scheduled_t=time.perf_counter(),
                         lora_name=choose_lora_name(lora_names, lora_rng),
+                        seed=args.seed,
                     )
 
         # Measurement scheduling.

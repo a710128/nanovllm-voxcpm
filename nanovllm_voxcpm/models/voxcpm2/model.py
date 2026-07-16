@@ -431,9 +431,14 @@ class UnifiedCFM(nn.Module):
         cond: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         bsz = mu.shape[0]
-        z = torch.randn((bsz, self.in_channels, self.patch_size), device=mu.device, dtype=mu.dtype)
+        if z_noise is not None:
+            z = z_noise
+        else:
+            z = torch.randn((bsz, self.in_channels, self.patch_size), device=mu.device, dtype=mu.dtype)
+
         z = z * temperature[:, None, None]
         t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
         t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
@@ -636,6 +641,7 @@ class VoxCPM2Model(nn.Module):
         feat_mask: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         feat_embeds = self.enc_to_lm_proj(self.feat_encoder(feat))
         feat_embeds = torch.masked_fill(feat_embeds, feat_mask.unsqueeze(-1).logical_not(), 0)
@@ -669,6 +675,7 @@ class VoxCPM2Model(nn.Module):
             cond=prefix_feat_cond.transpose(1, 2).contiguous(),
             temperature=temperature,
             cfg_value=cfg_value,
+            z_noise=z_noise,
         ).transpose(1, 2)
         stop_flag = self.stop_head(self.stop_actn(self.stop_proj(lm_hidden))).argmax(dim=-1)
         return {"latents": pred_feat, "stop_flag": stop_flag}

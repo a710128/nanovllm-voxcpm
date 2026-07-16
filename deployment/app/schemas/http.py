@@ -171,3 +171,4 @@ class GenerateRequest(BaseModel):
     max_generate_length: int = Field(2000, ge=1, description="Maximum number of model generation steps.")
     temperature: float = Field(1.0, ge=0.0, description="Sampling temperature.")
     cfg_value: float = Field(1.5, ge=0.0, description="Classifier-free guidance scale.")
+    seed: int | None = Field(None, description="Random seed for generation.")
