@@ -18,7 +18,6 @@ if _REPO_ROOT not in sys.path:
 
 from tests._shims import install_gpu_shims  # noqa: E402
 
-
 # Skip the entire deployment test suite if optional runtime deps are missing.
 pytest.importorskip("fastapi")
 pytest.importorskip("starlette")

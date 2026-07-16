@@ -1,0 +1,31 @@
+Wave 4 Gap Closure - Final Verification (post network-interruption fix)
+
+Date: this session (follow-up after boulder-complete interruption)
+
+MEASURED RESULTS (via bash scripts/coverage.sh):
+
+Module                          | Target | Before | After | Status
+---------------------------------|--------|--------|-------|--------
+voxcpm/model.py                  | >=45%  | 12%    | 56%   | PASS (+11pp over target)
+voxcpm/runner.py                 | >=60%  | 38%    | 80%   | PASS (+20pp over target)
+voxcpm2/model.py                 | >=60%  | 52%    | 62%   | PASS (+2pp over target)
+voxcpm/server.py                 | >=75%  | 70%    | 76%   | PASS (+1pp over target)
+voxcpm2/server.py                | >=75%  | 71%    | 76%   | PASS (+1pp over target)
+model_runner.py (already passed) | >=70%  | 83%    | 83%   | PASS (unchanged, untouched)
+
+COMBINED TOTAL: 71% -> 76% (+5pp)
+
+Test suite: 594 passed, 4 deselected (gpu-marked), 0 failed
+Black: All done, 145 files unchanged
+Ruff (F,E9): All checks passed
+LOC ceiling: all new/modified utility files <= 250 pure LOC
+  - model_utils.py: 195 pure LOC
+  - model_utils_shapes.py: 34 pure LOC (new sibling split)
+  - runner_utils.py: 126 pure LOC
+  - voxcpm2/model_utils.py: 134 pure LOC
+  - voxcpm2/model_utils_rope.py: 61 pure LOC
+  - voxcpm2/model_utils_cfm.py: 72 pure LOC (new sibling split)
+
+Both VoxCPMModel and VoxCPM2Model import successfully after seam extraction (no behavior regression).
+
+Verified by: Atlas orchestrator, directly running commands (not trusting subagent self-reports alone).
