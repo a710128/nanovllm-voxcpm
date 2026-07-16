@@ -1,0 +1,64 @@
+Task 19: VoxCPM server request coverage
+Date: 2026-07-16
+
+Baseline measurement
+Command:
+  uv run coverage erase
+  uv run coverage run -m pytest tests/unit/ -m "not gpu" -q
+  uv run coverage combine
+  uv run coverage report -m nanovllm_voxcpm/models/voxcpm/server.py nanovllm_voxcpm/models/voxcpm2/server.py
+Result before this task's tests:
+  nanovllm_voxcpm/models/voxcpm/server.py   69%
+  nanovllm_voxcpm/models/voxcpm2/server.py  71%
+
+Final coverage measurement
+Command:
+  uv run coverage erase
+  uv run coverage run -m pytest tests/unit/ -m "not gpu" -q
+  uv run coverage combine
+  uv run coverage report -m nanovllm_voxcpm/models/voxcpm/server.py nanovllm_voxcpm/models/voxcpm2/server.py
+Result:
+  520 passed, 4 deselected
+  nanovllm_voxcpm/models/voxcpm/server.py   75%
+  nanovllm_voxcpm/models/voxcpm2/server.py  77%
+  TOTAL                                     76%
+
+Focused route tests
+Commands and results:
+  uv run pytest tests/unit/test_voxcpm_server_routes.py -p no:cov -q
+  34 passed
+
+  uv run pytest tests/unit/test_voxcpm2_server_routes.py -p no:cov -q
+  38 passed
+
+Full non-GPU suite
+Command:
+  uv run pytest -m "not gpu" -q
+Result:
+  591 passed, 4 deselected
+
+Formatting and syntax
+Commands and results:
+  uv run black --check tests/unit/test_voxcpm_server_routes.py tests/unit/test_voxcpm2_server_routes.py
+  2 files would be left unchanged
+
+  uv run python -m compileall tests/unit/test_voxcpm_server_routes.py tests/unit/test_voxcpm2_server_routes.py
+  passed
+
+External verification constraints observed in the current worktree
+1. The requested pytest-cov command with dotted leaf-module targets fails during
+   collection before tests run:
+     uv run pytest tests/unit/ \
+       --cov=nanovllm_voxcpm.models.voxcpm.server \
+       --cov=nanovllm_voxcpm.models.voxcpm2.server \
+       --cov-report=term -m "not gpu" -q
+   Error: RuntimeError: function '_has_torch_function' already has a docstring
+   The same tests pass under Coverage.py directly. A filesystem-style pytest-cov
+   target also passes, confirming this is specific to dotted source resolution.
+
+2. `uv run black --check .` currently reports unrelated concurrent worktree
+   changes in:
+     nanovllm_voxcpm/models/voxcpm2/model_utils.py
+     nanovllm_voxcpm/models/voxcpm2/model_utils_cfm.py
+     tests/unit/test_voxcpm2_model_utils.py
+   The two route test files modified by this task pass Black unchanged.
