@@ -459,22 +459,23 @@ class UnifiedCFM(nn.Module):
     ):
         t, dt = t_span[0], t_span[0] - t_span[1]
         zero_init_steps = max(1, int(len(t_span) * 0.04))
+        bsz = x.size(0)
+        x_in    = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
+        mu_in   = torch.empty([2 * bsz, mu.size(1)],                   device=x.device, dtype=x.dtype)
+        t_in    = torch.empty([2 * bsz],                                device=x.device, dtype=x.dtype)
+        dt_in   = torch.empty([2 * bsz],                                device=x.device, dtype=x.dtype)
+        cond_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
         for step in range(1, len(t_span)):
             if step <= zero_init_steps:
                 dphi_dt = 0.0
             else:
-                bsz = x.size(0)
-                x_in = torch.zeros([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
-                mu_in = torch.zeros([2 * bsz, mu.size(1)], device=x.device, dtype=x.dtype)
-                t_in = torch.zeros([2 * bsz], device=x.device, dtype=x.dtype)
-                dt_in = torch.zeros([2 * bsz], device=x.device, dtype=x.dtype)
-                cond_in = torch.zeros([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
-                x_in[:bsz], x_in[bsz:] = x, x
+                x_in[:bsz], x_in[bsz:]     = x, x
                 mu_in[:bsz] = mu
-                t_in[:bsz], t_in[bsz:] = t.unsqueeze(0), t.unsqueeze(0)
-                dt_in[:bsz], dt_in[bsz:] = dt.unsqueeze(0), dt.unsqueeze(0)
+                mu_in[bsz:].zero_()
+                t_in[:bsz]  = t.unsqueeze(0);  t_in[bsz:]  = t.unsqueeze(0)
+                dt_in[:bsz] = dt.unsqueeze(0); dt_in[bsz:] = dt.unsqueeze(0)
                 if not self.mean_mode:
-                    dt_in = torch.zeros_like(dt_in)
+                    dt_in.zero_()
                 cond_in[:bsz], cond_in[bsz:] = cond, cond
                 dphi_dt = self.estimator(x_in, mu_in, t_in, cond_in, dt_in)
                 dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [x.size(0), x.size(0)], dim=0)
