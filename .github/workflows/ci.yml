@@ -240,7 +240,7 @@ jobs:
             --include 'nanovllm_voxcpm/models/**/config.py' \
             --include 'nanovllm_voxcpm/models/**/utils.py' \
             --include 'nanovllm_voxcpm/models/**/lora_loader.py' \
-            --include 'nanovllm_voxcpm/models/**/model_utils.py' \
+            --include 'nanovllm_voxcpm/models/**/model_utils*.py' \
             --include 'nanovllm_voxcpm/models/**/runner_utils.py' \
             --include 'nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py' \
             --include 'nanovllm_voxcpm/utils/**' \
