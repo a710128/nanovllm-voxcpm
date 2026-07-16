@@ -1,0 +1,33 @@
+Task 17 fix: VoxCPM runner orchestration coverage
+Date: 2026-07-16
+
+Targeted tests
+Command: uv run pytest tests/unit/test_voxcpm_runner.py tests/unit/test_voxcpm_runner_utils.py tests/unit/test_voxcpm_engine_orchestration.py -m "not gpu" -q
+Result: PASS - 46 passed, 1 warning in 1.10s
+
+Runner coverage
+The dotted --cov source imports nanovllm_voxcpm before pytest loads tests/unit/conftest.py. In this environment pytest-cov then unloads PyTorch imported during source discovery, and a second import fails with "function '_has_torch_function' already has a docstring". Installing the repository's existing GPU shims before pytest starts avoids that source-discovery pollution without changing measured code.
+
+Command: uv run python -c "from tests._shims import install_gpu_shims; install_gpu_shims(); import pytest; raise SystemExit(pytest.main(['tests/unit/', '--cov=nanovllm_voxcpm.models.voxcpm.runner', '--cov-report=term', '-m', 'not gpu', '-q']))"
+Result: PASS - 528 passed, 4 deselected, 7 warnings in 6.30s
+Coverage:
+Name                                      Stmts   Miss Branch BrPart  Cover
+nanovllm_voxcpm/models/voxcpm/runner.py      89     18     10      2    80%
+TOTAL                                        89     18     10      2    80%
+
+Formatting
+Command: uv run black --check nanovllm_voxcpm/ tests/
+Result: PASS - 108 files would be left unchanged
+
+Full non-GPU suite
+Command: uv run pytest -m "not gpu" -q
+Result: PASS - 594 passed, 4 deselected, 5 warnings in 4.88s
+
+Syntax
+Command: uv run python -m compileall -q nanovllm_voxcpm tests
+Result: PASS
+
+Static diagnostics
+Command attempted: uv run basedpyright tests/unit/test_voxcpm_runner.py
+Result: NOT AVAILABLE - basedpyright executable is not installed in the managed environment
+Fallback: compileall passed and the project no-excuse audit reported no violations in all three modified test modules.
