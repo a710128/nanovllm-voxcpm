@@ -129,6 +129,30 @@ def pytest_configure(config):
 
         setattr(pyd, "BaseModel", BaseModel)
 
+    # ---------------------------------------------------------------------
+    # transformers shim (needed by voxcpm2 engine and utils imports).
+    #
+    # Install a shim that covers ALL symbols used across the test suite so
+    # that no individual test file needs to inject its own partial stub.
+    # A partial stub registered by one test file would lack attributes like
+    # LlamaTokenizerFast and break subsequent tests that import the engine.
+    # ---------------------------------------------------------------------
+    if not _module_available("transformers"):
+        t = _ensure_module("transformers")
+
+        class _FakePreTrainedTokenizer:  # pragma: no cover
+            pass
+
+        class _FakeLlamaTokenizerFast:  # pragma: no cover
+            pass
+
+        class _FakeAutoTokenizer:  # pragma: no cover
+            pass
+
+        setattr(t, "PreTrainedTokenizer", _FakePreTrainedTokenizer)
+        setattr(t, "LlamaTokenizerFast", _FakeLlamaTokenizerFast)
+        setattr(t, "AutoTokenizer", _FakeAutoTokenizer)
+
 
 def pytest_collection_modifyitems(config, items):
     cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")

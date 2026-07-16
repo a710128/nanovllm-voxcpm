@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -27,19 +26,8 @@ _CANONICAL_NAME = "nanovllm_voxcpm.models.voxcpm2.utils"
 
 
 def _bootstrap_utils_module() -> None:
-    """Load utils.py directly so the voxcpm2 __init__ chain is never triggered."""
     if _CANONICAL_NAME in sys.modules:
         return
-
-    # Minimal transformers stub (utils.py only needs PreTrainedTokenizer for typing)
-    if "transformers" not in sys.modules:
-        t = types.ModuleType("transformers")
-
-        class PreTrainedTokenizer:  # pragma: no cover
-            pass
-
-        t.PreTrainedTokenizer = PreTrainedTokenizer
-        sys.modules["transformers"] = t
 
     spec = importlib.util.spec_from_file_location(_CANONICAL_NAME, str(_UTILS_PATH))
     assert spec is not None and spec.loader is not None, f"Cannot locate {_UTILS_PATH}"
