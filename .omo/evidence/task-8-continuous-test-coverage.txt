@@ -1,0 +1,176 @@
+
+### script threshold-free
+0
+EXIT_CODE=1
+
+### no fail_under in config
+warning: The `extra-build-dependencies` option is experimental and may change without warning. Pass `--preview-features extra-build-dependencies` to disable this warning.
+no fail_under in config: OK
+EXIT_CODE=0
+
+### coverage floor in ci workflow
+187:  # Coverage floor is enforced here only (--cov-fail-under=62 in the pytest invocation below).
+221:        run: uv run --no-sync coverage report --fail-under=62
+231:            --fail-under=80 \
+EXIT_CODE=0
+
+### coverage floor 62
+Name                                                          Stmts   Miss Branch BrPart  Cover
+-----------------------------------------------------------------------------------------------
+deployment/app/api/routes/generate.py                           140     12     60      6    90%
+deployment/app/core/config.py                                   165      4     56      4    96%
+deployment/app/core/lifespan.py                                  46      2     12      4    90%
+deployment/app/core/metrics.py                                   55     14      4      1    71%
+deployment/app/services/mp3.py                                  118     10     26      2    92%
+nanovllm_voxcpm/__init__.py                                      10      6      0      0    40%
+nanovllm_voxcpm/engine/block_manager.py                          96      2     26      3    96%
+nanovllm_voxcpm/engine/llm_engine.py                            105      4     20      1    96%
+nanovllm_voxcpm/engine/lora_manager.py                          298     29     90     21    87%
+nanovllm_voxcpm/engine/model_runner.py                          499    218    150     22    53%
+nanovllm_voxcpm/engine/scheduler.py                              91      0     34      3    98%
+nanovllm_voxcpm/engine/sequence.py                               45      1      0      0    98%
+nanovllm_voxcpm/layers/attention.py                              49     37     10      0    20%
+nanovllm_voxcpm/layers/audio_vae.py                             156    106     20      0    28%
+nanovllm_voxcpm/layers/audio_vae_v2.py                          226     68     54      8    64%
+nanovllm_voxcpm/layers/embed_head.py                             50     36      6      0    25%
+nanovllm_voxcpm/layers/linear.py                                 97     49      8      1    47%
+nanovllm_voxcpm/layers/lora.py                                  567    236    230     32    52%
+nanovllm_voxcpm/layers/rotary_embedding.py                       32      3      0      0    91%
+nanovllm_voxcpm/llm.py                                           43      2     16      1    95%
+nanovllm_voxcpm/lora.py                                         211     56     72     16    70%
+nanovllm_voxcpm/lora_ops/triton_ops/kernel_utils.py              93     84     32      0     7%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_expand_op.py            48     22      8      2    50%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py      48      4      6      2    85%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_shrink_op.py           137     86     30      6    37%
+nanovllm_voxcpm/lora_ops/triton_ops/utils.py                     82     12     20      5    83%
+nanovllm_voxcpm/models/voxcpm2/engine.py                        106     37     28      8    62%
+nanovllm_voxcpm/models/voxcpm2/lora_loader.py                   175     20     80     20    84%
+nanovllm_voxcpm/models/voxcpm2/model.py                         350    187     40      2    44%
+nanovllm_voxcpm/models/voxcpm2/runner.py                         98     20     12      3    79%
+nanovllm_voxcpm/models/voxcpm2/server.py                        391    154    106     23    56%
+nanovllm_voxcpm/models/voxcpm2/utils.py                          26     23      6      0     9%
+nanovllm_voxcpm/models/voxcpm/engine.py                          97     33     28      5    62%
+nanovllm_voxcpm/models/voxcpm/lora_loader.py                    183     24     84     22    83%
+nanovllm_voxcpm/models/voxcpm/model.py                          427    370     54      0    12%
+nanovllm_voxcpm/models/voxcpm/runner.py                         107     75     18      0    26%
+nanovllm_voxcpm/models/voxcpm/server.py                         391    160    106     23    56%
+nanovllm_voxcpm/models/voxcpm/utils.py                           28      3      6      1    88%
+nanovllm_voxcpm/utils/context.py                                 69      3      8      3    92%
+nanovllm_voxcpm/utils/distributed.py                              9      2      4      2    69%
+nanovllm_voxcpm/utils/loader.py                                  39      2     16      0    96%
+-----------------------------------------------------------------------------------------------
+TOTAL                                                          6464   2216   1596    252    63%
+
+30 files skipped due to complete coverage.
+EXIT_CODE=0
+
+### coverage floor 95
+Name                                                          Stmts   Miss Branch BrPart  Cover
+-----------------------------------------------------------------------------------------------
+deployment/app/api/routes/generate.py                           140     12     60      6    90%
+deployment/app/core/config.py                                   165      4     56      4    96%
+deployment/app/core/lifespan.py                                  46      2     12      4    90%
+deployment/app/core/metrics.py                                   55     14      4      1    71%
+deployment/app/services/mp3.py                                  118     10     26      2    92%
+nanovllm_voxcpm/__init__.py                                      10      6      0      0    40%
+nanovllm_voxcpm/engine/block_manager.py                          96      2     26      3    96%
+nanovllm_voxcpm/engine/llm_engine.py                            105      4     20      1    96%
+nanovllm_voxcpm/engine/lora_manager.py                          298     29     90     21    87%
+nanovllm_voxcpm/engine/model_runner.py                          499    218    150     22    53%
+nanovllm_voxcpm/engine/scheduler.py                              91      0     34      3    98%
+nanovllm_voxcpm/engine/sequence.py                               45      1      0      0    98%
+nanovllm_voxcpm/layers/attention.py                              49     37     10      0    20%
+nanovllm_voxcpm/layers/audio_vae.py                             156    106     20      0    28%
+nanovllm_voxcpm/layers/audio_vae_v2.py                          226     68     54      8    64%
+nanovllm_voxcpm/layers/embed_head.py                             50     36      6      0    25%
+nanovllm_voxcpm/layers/linear.py                                 97     49      8      1    47%
+nanovllm_voxcpm/layers/lora.py                                  567    236    230     32    52%
+nanovllm_voxcpm/layers/rotary_embedding.py                       32      3      0      0    91%
+nanovllm_voxcpm/llm.py                                           43      2     16      1    95%
+nanovllm_voxcpm/lora.py                                         211     56     72     16    70%
+nanovllm_voxcpm/lora_ops/triton_ops/kernel_utils.py              93     84     32      0     7%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_expand_op.py            48     22      8      2    50%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py      48      4      6      2    85%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_shrink_op.py           137     86     30      6    37%
+nanovllm_voxcpm/lora_ops/triton_ops/utils.py                     82     12     20      5    83%
+nanovllm_voxcpm/models/voxcpm2/engine.py                        106     37     28      8    62%
+nanovllm_voxcpm/models/voxcpm2/lora_loader.py                   175     20     80     20    84%
+nanovllm_voxcpm/models/voxcpm2/model.py                         350    187     40      2    44%
+nanovllm_voxcpm/models/voxcpm2/runner.py                         98     20     12      3    79%
+nanovllm_voxcpm/models/voxcpm2/server.py                        391    154    106     23    56%
+nanovllm_voxcpm/models/voxcpm2/utils.py                          26     23      6      0     9%
+nanovllm_voxcpm/models/voxcpm/engine.py                          97     33     28      5    62%
+nanovllm_voxcpm/models/voxcpm/lora_loader.py                    183     24     84     22    83%
+nanovllm_voxcpm/models/voxcpm/model.py                          427    370     54      0    12%
+nanovllm_voxcpm/models/voxcpm/runner.py                         107     75     18      0    26%
+nanovllm_voxcpm/models/voxcpm/server.py                         391    160    106     23    56%
+nanovllm_voxcpm/models/voxcpm/utils.py                           28      3      6      1    88%
+nanovllm_voxcpm/utils/context.py                                 69      3      8      3    92%
+nanovllm_voxcpm/utils/distributed.py                              9      2      4      2    69%
+nanovllm_voxcpm/utils/loader.py                                  39      2     16      0    96%
+-----------------------------------------------------------------------------------------------
+TOTAL                                                          6464   2216   1596    252    63%
+
+30 files skipped due to complete coverage.
+Coverage failure: total of 63 is less than fail-under=95
+EXPECTED FAIL: floor 95 fails at 63%
+EXIT_CODE=0
+
+### matrix run tests has no --cov
+      - name: Run tests
+        run: uv run --no-sync pytest -q
+
+matrix run tests has no --cov: OK
+EXIT_CODE=0
+
+### coverage floor 95 (actual non-zero)
+Name                                                          Stmts   Miss Branch BrPart  Cover
+-----------------------------------------------------------------------------------------------
+deployment/app/api/routes/generate.py                           140     12     60      6    90%
+deployment/app/core/config.py                                   165      4     56      4    96%
+deployment/app/core/lifespan.py                                  46      2     12      4    90%
+deployment/app/core/metrics.py                                   55     14      4      1    71%
+deployment/app/services/mp3.py                                  118     10     26      2    92%
+nanovllm_voxcpm/__init__.py                                      10      6      0      0    40%
+nanovllm_voxcpm/engine/block_manager.py                          94      2     26      3    96%
+nanovllm_voxcpm/engine/llm_engine.py                            105      4     20      1    96%
+nanovllm_voxcpm/engine/lora_manager.py                          298     29     90     21    87%
+nanovllm_voxcpm/engine/model_runner.py                          499    218    150     22    53%
+nanovllm_voxcpm/engine/scheduler.py                              91      0     34      3    98%
+nanovllm_voxcpm/engine/sequence.py                               45      1      0      0    98%
+nanovllm_voxcpm/layers/attention.py                              49     37     10      0    20%
+nanovllm_voxcpm/layers/audio_vae.py                             156    106     20      0    28%
+nanovllm_voxcpm/layers/audio_vae_v2.py                          226     68     54      8    64%
+nanovllm_voxcpm/layers/embed_head.py                             50     36      6      0    25%
+nanovllm_voxcpm/layers/linear.py                                 97     49      8      1    47%
+nanovllm_voxcpm/layers/lora.py                                  567    236    230     32    52%
+nanovllm_voxcpm/layers/rotary_embedding.py                       32      3      0      0    91%
+nanovllm_voxcpm/llm.py                                           43      2     16      1    95%
+nanovllm_voxcpm/lora.py                                         211     56     72     16    70%
+nanovllm_voxcpm/lora_ops/triton_ops/kernel_utils.py              93     84     32      0     7%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_expand_op.py            48     22      8      2    50%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_kernel_metadata.py      48      4      6      2    85%
+nanovllm_voxcpm/lora_ops/triton_ops/lora_shrink_op.py           137     86     30      6    37%
+nanovllm_voxcpm/lora_ops/triton_ops/utils.py                     82     12     20      5    83%
+nanovllm_voxcpm/models/voxcpm2/engine.py                        106     37     28      8    62%
+nanovllm_voxcpm/models/voxcpm2/lora_loader.py                   175     20     80     20    84%
+nanovllm_voxcpm/models/voxcpm2/model.py                         350    187     40      2    44%
+nanovllm_voxcpm/models/voxcpm2/runner.py                         98     20     12      3    79%
+nanovllm_voxcpm/models/voxcpm2/server.py                        391    154    106     23    56%
+nanovllm_voxcpm/models/voxcpm2/utils.py                          26     23      6      0     9%
+nanovllm_voxcpm/models/voxcpm/engine.py                          97     33     28      5    62%
+nanovllm_voxcpm/models/voxcpm/lora_loader.py                    183     24     84     22    83%
+nanovllm_voxcpm/models/voxcpm/model.py                          427    370     54      0    12%
+nanovllm_voxcpm/models/voxcpm/runner.py                         107     75     18      0    26%
+nanovllm_voxcpm/models/voxcpm/server.py                         391    160    106     23    56%
+nanovllm_voxcpm/models/voxcpm/utils.py                           28      3      6      1    88%
+nanovllm_voxcpm/utils/context.py                                 69      3      8      3    92%
+nanovllm_voxcpm/utils/distributed.py                              9      2      4      2    69%
+nanovllm_voxcpm/utils/loader.py                                  39      2     16      0    96%
+-----------------------------------------------------------------------------------------------
+TOTAL                                                          6462   2216   1596    252    63%
+
+30 files skipped due to complete coverage.
+Coverage failure: total of 63 is less than fail-under=95
+EXIT_CODE=2
+EXPECTED FAIL: floor 95 fails at 63%
