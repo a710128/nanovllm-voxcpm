@@ -29,11 +29,27 @@ Note: the optional FastAPI demo service (`deployment/`) is not published on PyPI
 
 ### Prerequisites
 
-- Linux + NVIDIA GPU (CUDA)
+- Linux / Windows + NVIDIA GPU (CUDA)
 - Python >= 3.10
 - `flash-attn` is required (the package imports it at runtime)
 
+> ⚠️ **Important Note for Windows Users:** 
+> Automated installation and compilation of `flash-attn` is bypassed on Windows during the package setup phase to prevent build isolation and compiler errors. 
+> 
+> **Please note that a standard `pip install nano-vllm-voxcpm` on Windows is NOT enough by itself to run the engine.** The package will fail immediately at runtime with a `ModuleNotFoundError` unless you install `flash-attn` separately in your active Python environment.
+> 
+> To resolve this, you must manually install a precompiled community wheel (highly recommended to avoid local MSVC/NVCC compilation headaches) matching your exact Python/PyTorch/CUDA version, or compile it locally from source.
+
 The runtime is GPU-centric (Triton + FlashAttention). CPU-only execution is not supported.
+
+Windows support notes:
+
+- Tensor parallelism (`tensor_parallel_size > 1`) is not supported on Windows. This path requires CUDA
+  tensor collectives through NCCL, which is not available on Windows; use single-GPU workers on Windows
+  or a Linux environment for tensor parallelism.
+- Advanced users can manually override automatic KV-cache sizing with `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS`.
+  Leave it unset for the normal safe memory calculation. Setting it bypasses that calculation and may cause
+  CUDA OOM if the value is too high for the GPU.
 
 ### Install from source (dev)
 
@@ -49,7 +65,7 @@ Dev deps (tests):
 uv sync --frozen --dev
 ```
 
-Note: `flash-attn` may require additional system CUDA tooling depending on your environment.
+Note: compiling `flash-attn` from source on Linux may require the native NVIDIA CUDA Toolkit (with `nvcc` and CUDA headers) to be present in your system PATH.
 
 ## Basic Usage
 

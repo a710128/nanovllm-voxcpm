@@ -104,8 +104,14 @@ def test_engine_step_finishes_sequence_and_supports_cancel(monkeypatch, tmp_path
 
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
     monkeypatch.setattr(llm_engine.torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(
+        llm_engine,
+        "get_distributed_port",
+        lambda: (_ for _ in ()).throw(AssertionError("single-GPU should not request a distributed port")),
+    )
 
     engine = EngineUnderTest(_DummyRunner, _make_config(tmp_path, devices=None), tensor_parallel_size=1)
+    assert engine.distributed_port is None
 
     cancelled = Sequence("cancelled", [10, 11], 256)
     engine.add_sequence(cancelled)
@@ -196,6 +202,7 @@ def test_engine_validates_device_count(monkeypatch, tmp_path):
 
     EngineUnderTest = _make_engine_class()
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(llm_engine.sys, "platform", "linux")
     monkeypatch.setattr(llm_engine.torch.cuda, "device_count", lambda: 1)
 
     cfg = _make_config(tmp_path, devices=None)
@@ -209,11 +216,37 @@ def test_engine_validates_explicit_devices_match_tensor_parallel(monkeypatch, tm
 
     EngineUnderTest = _make_engine_class()
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(llm_engine.sys, "platform", "linux")
 
     cfg = _make_config(tmp_path, devices=[0])
 
     with pytest.raises(ValueError, match="Number of devices 1 is not equal to tensor parallel size 2"):
         EngineUnderTest(_DummyRunner, cfg, tensor_parallel_size=2)
+
+
+def test_engine_rejects_windows_tensor_parallel_before_spawning(monkeypatch, tmp_path):
+    import nanovllm_voxcpm.engine.llm_engine as llm_engine
+
+    EngineUnderTest = _make_engine_class()
+    _DummyRunner.instances.clear()
+
+    class FailContext:
+        def Event(self):
+            raise AssertionError("workers should not be spawned")
+
+        def Process(self, target, args):
+            raise AssertionError("workers should not be spawned")
+
+    monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(llm_engine.sys, "platform", "win32")
+    monkeypatch.setattr(llm_engine.mp, "get_context", lambda method: FailContext())
+
+    cfg = _make_config(tmp_path, devices=[0, 1])
+
+    with pytest.raises(NotImplementedError, match="not supported on Windows"):
+        EngineUnderTest(_DummyRunner, cfg, tensor_parallel_size=2)
+
+    assert _DummyRunner.instances == []
 
 
 def test_engine_exit_joins_spawned_processes(monkeypatch, tmp_path):
@@ -252,13 +285,18 @@ def test_engine_exit_joins_spawned_processes(monkeypatch, tmp_path):
             return FakeProcess(target, args)
 
     monkeypatch.setattr(llm_engine.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(llm_engine.sys, "platform", "linux")
     monkeypatch.setattr(llm_engine.mp, "get_context", lambda method: FakeContext())
+    monkeypatch.setattr(llm_engine, "get_distributed_port", lambda: 12345)
 
     engine = EngineUnderTest(_DummyRunner, _make_config(tmp_path, devices=[0, 1]), tensor_parallel_size=2)
     engine.exit()
 
     assert len(events) == 1
     assert len(processes) == 1
+    assert engine.distributed_port == 12345
+    assert _DummyRunner.instances[0].distributed_port == 12345
+    assert processes[0].args[3] == 12345
     assert processes[0].started is True
     assert processes[0].joined is True
     assert _DummyRunner.instances[0].calls[-1][0] == "exit"
