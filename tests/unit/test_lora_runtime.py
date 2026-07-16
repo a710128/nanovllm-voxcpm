@@ -334,3 +334,34 @@ def test_lora_runtime_slot_reuse_clears_modules_absent_from_new_adapter():
     finally:
         reset_lora_context()
         set_backend_for_testing(None)
+
+
+def test_vendored_lora_plan_cache_uses_stable_shape_key_for_temporary_views():
+    from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend
+
+    backend = _VendoredTritonPunicaBackend()
+    lora_a = torch.zeros(3, 1, 4, 8)
+    lora_b_q = torch.zeros(1, 16, 8)
+    lora_b_k = torch.zeros(1, 8, 8)
+    lora_b_v = torch.zeros(1, 8, 8)
+    y_slices = [torch.zeros(2, 16), torch.zeros(2, 8), torch.zeros(2, 8)]
+
+    for _ in range(100):
+        # Mirrors QKV/Merged forwards: each iteration creates fresh temporary
+        # views over stable parameters. The plan cache should not grow with
+        # Python view object identity.
+        backend._get_plan(
+            y_slices,
+            [lora_a[0], lora_a[1], lora_a[2]],
+            [lora_b_q, lora_b_k, lora_b_v],
+        )
+
+    assert len(backend._add_lora_plan_cache) == 1
+
+    # A genuinely different shape still needs a distinct plan.
+    backend._get_plan(
+        [torch.zeros(2, 32)],
+        [torch.zeros(1, 4, 8)],
+        [torch.zeros(1, 32, 8)],
+    )
+    assert len(backend._add_lora_plan_cache) == 2

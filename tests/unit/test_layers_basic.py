@@ -43,6 +43,46 @@ def test_rmsnorm_forward_and_residual_path():
     assert r2.shape == x.shape
 
 
+def _reference_rmsnorm(x: "torch.Tensor", weight: "torch.Tensor", eps: float) -> "torch.Tensor":
+    xf = x.float()
+    var = xf.pow(2).mean(dim=-1, keepdim=True)
+    normed = xf * torch.rsqrt(var + eps)
+    return (normed * weight.float()).to(x.dtype)
+
+
+def test_rmsnorm_forward_matches_reference():
+    from nanovllm_voxcpm.layers.layernorm import RMSNorm
+
+    eps = 1e-6
+    norm = RMSNorm(hidden_size=16, eps=eps)
+    with torch.no_grad():
+        norm.weight.copy_(torch.randn(16) * 0.1 + 1.0)
+
+    x = torch.randn(4, 16)
+    got = norm(x)
+    expected = _reference_rmsnorm(x, norm.weight, eps)
+    torch.testing.assert_close(got, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_rmsnorm_add_residual_is_exact_sum():
+    from nanovllm_voxcpm.layers.layernorm import RMSNorm
+
+    eps = 1e-6
+    norm = RMSNorm(hidden_size=16, eps=eps)
+    with torch.no_grad():
+        norm.weight.copy_(torch.randn(16) * 0.1 + 1.0)
+
+    x = torch.randn(4, 16)
+    residual = torch.randn(4, 16)
+
+    out, new_residual = norm(x, residual)
+
+    # add_rms_forward must return the pre-normalization sum bit-exactly (rtol=atol=0).
+    torch.testing.assert_close(new_residual, (x.float() + residual.float()).to(x.dtype), rtol=0, atol=0)
+    expected_out = _reference_rmsnorm(new_residual, norm.weight, eps)
+    torch.testing.assert_close(out, expected_out, rtol=1e-5, atol=1e-5)
+
+
 def test_silu_and_mul():
     from nanovllm_voxcpm.layers.activation import SiluAndMul
 

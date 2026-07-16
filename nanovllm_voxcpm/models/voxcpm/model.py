@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-import torch.distributed as dist
 from typing import Optional
 
 from nanovllm_voxcpm.layers.activation import SiluAndMul
@@ -32,6 +31,7 @@ from nanovllm_voxcpm.utils.context import (
     PROJ_LORA_DOMAIN,
     get_context,
 )
+from nanovllm_voxcpm.utils.distributed import get_tp_world_size
 
 
 def rotate_half(x):
@@ -191,7 +191,7 @@ class Cpm4Attention(nn.Module):
         lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
-        tp_size = dist.get_world_size()
+        tp_size = get_tp_world_size()
         self.total_num_heads = num_heads
         assert self.total_num_heads % tp_size == 0
         self.num_heads = self.total_num_heads // tp_size
@@ -636,6 +636,7 @@ class UnifiedCFM(torch.nn.Module):
         cond: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         """Forward diffusion
 
@@ -646,6 +647,7 @@ class UnifiedCFM(torch.nn.Module):
             cond: Not used but kept for future purposes
             temperature (torch.Tensor): temperature for scaling noise. (batch_size,)
             cfg_value (torch.Tensor): cfg value for guidance. (batch_size,)
+            z_noise (torch.Tensor, optional): pre-generated seeded noise. (batch_size, in_channels, patch_size)
 
         Returns:
             sample: generated mel-spectrogram
@@ -653,8 +655,13 @@ class UnifiedCFM(torch.nn.Module):
         """
         b, c = mu.shape
         t = self.patch_size
-        z = torch.randn((b, self.in_channels, t), device=mu.device, dtype=mu.dtype) * temperature[:, None, None]
 
+        if z_noise is not None:
+            z = z_noise
+        else:
+            z = torch.randn((b, self.in_channels, t), device=mu.device, dtype=mu.dtype)
+
+        z = z * temperature[:, None, None]
         t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
         # Sway sampling strategy
         t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
@@ -897,6 +904,7 @@ class VoxCPMModel(nn.Module):
         feat_mask: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         """
         text_tokens: [T]
@@ -955,6 +963,7 @@ class VoxCPMModel(nn.Module):
             cond=prefix_feat_cond.transpose(1, 2).contiguous(),
             temperature=temperature,
             cfg_value=cfg_value,
+            z_noise=z_noise,
         ).transpose(1, 2)
 
         stop_flag = self.stop_head(self.stop_actn(self.stop_proj(lm_hidden))).argmax(dim=-1)

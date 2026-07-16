@@ -55,6 +55,13 @@ Environment variables:
   - `NANOVLLM_SERVERPOOL_ENFORCE_EAGER` (bool, default `false`; accepts `1/0,true/false,yes/no,on/off`)
   - `NANOVLLM_SERVERPOOL_DEVICES` (comma-separated ints, default `0`; e.g. `0,1`)
   - `NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS` (int, default `10`, allowed `> 0`) — number of CFM flow-matching ODE steps for the audio decoder. Lower is faster but coarser; higher is slower but finer.
+  - `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` (advanced int override, optional; read by the core runtime to
+    bypass automatic KV-cache sizing and may cause CUDA OOM if set too high)
+
+Windows runtime note:
+
+- Tensor parallelism (`tensor_parallel_size > 1`) is not supported on Windows because NCCL is unavailable
+  there. Run Windows deployments as single-GPU workers, or use Linux for tensor-parallel deployments.
 
 LoRA checkpoint layout (recommended):
 
@@ -181,11 +188,16 @@ Request body (JSON):
 - Reference audio (optional, mutually exclusive):
   - wav reference: `ref_audio_wav_base64` + `ref_audio_wav_format`
   - latents reference: `ref_audio_latents_base64`
-- `response_format` (optional, default `"mp3"`): output encoding, one of:
-  - `"mp3"`: MP3 stream (`audio/mpeg`), encoded server-side via `lameenc`
-  - `"pcm"`: raw signed 16-bit little-endian mono PCM (`audio/L16`) at the model
-    sample rate — lossless and lower-latency (skips the MP3 encoder), no container.
-    The consumer must know sample rate / channels out-of-band (see `X-Audio-*` headers).
+- Additional options (optional):
+  - `seed`: optional fixed random seed for reproducible generation (int)
+  - `cfg_value`: classifier-free guidance scale (float, default: `1.5`)
+  - `temperature`: sampling temperature (float, default: `1.0`)
+  - `max_generate_length`: maximum number of model generation steps (int, default: `2000`)
+  - `response_format` (default `"mp3"`): output encoding, one of:
+    - `"mp3"`: MP3 stream (`audio/mpeg`), encoded server-side via `lameenc`
+    - `"pcm"`: raw signed 16-bit little-endian mono PCM (`audio/L16`) at the model
+      sample rate — lossless and lower-latency (skips the MP3 encoder), no container.
+      The consumer must know sample rate / channels out-of-band (see `X-Audio-*` headers).
 
 `ref_audio_*` is independent from the prompt fields, so you can combine reference audio with either zero-shot or prompted generation.
 

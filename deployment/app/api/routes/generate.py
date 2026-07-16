@@ -172,13 +172,22 @@ async def generate(
         "cfg_value": req.cfg_value,
         "lora_name": req.lora_name,
     }
+
+    generate_params = inspect.signature(server.generate).parameters
+
     if ref_audio_latents is not None:
         generate_kwargs["ref_audio_latents"] = ref_audio_latents
 
     if ref_audio_latents is not None:
-        generate_params = inspect.signature(server.generate).parameters
         if "ref_audio_latents" not in generate_params:
             raise HTTPException(status_code=400, detail="Reference audio is not supported by the loaded model")
+
+    if req.seed is not None:
+        generate_kwargs["seed"] = req.seed
+
+    if req.seed is not None:
+        if "seed" not in generate_params:
+            raise HTTPException(status_code=400, detail="Seed is not supported by the loaded model")
 
     stream = server.generate(**generate_kwargs)
 

@@ -59,6 +59,7 @@ on top of this base engine:
 """
 
 import atexit
+import sys
 import torch.multiprocessing as mp
 
 from nanovllm_voxcpm.config import Config
@@ -87,7 +88,14 @@ class LLMEngineBase:
         config: Config,
         tensor_parallel_size: int,
     ):
-        self.distributed_port = get_distributed_port()
+        if sys.platform == "win32" and tensor_parallel_size > 1:
+            raise NotImplementedError(
+                "Tensor parallelism (tensor_parallel_size > 1) is currently not supported on Windows "
+                "because NCCL is unavailable and Gloo is not a CUDA tensor-collective replacement for this path. "
+                "Please run with a single GPU on Windows or use a Linux environment."
+            )
+
+        self.distributed_port = get_distributed_port() if tensor_parallel_size > 1 else None
 
         if config.devices is None or len(config.devices) == 0:
             n_devices = torch.cuda.device_count()

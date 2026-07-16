@@ -5,6 +5,7 @@ from multiprocessing.synchronize import Event
 from nanovllm_voxcpm.config import Config
 from nanovllm_voxcpm.engine.model_runner import RunnerTask, BaseModelRunner
 from nanovllm_voxcpm.utils.loader import load_model
+from nanovllm_voxcpm.utils.seed import derive_step_seed
 from nanovllm_voxcpm.models.voxcpm.model import VoxCPMModel, VoxCPMConfig
 from nanovllm_voxcpm.layers.audio_vae import AudioVAE
 import numpy as np
@@ -25,6 +26,8 @@ class VoxCPMPayload:
 
     # (T, D)
     padding_decode: np.ndarray | None = None
+    seed: int | None = None
+    seed_step: int = 0
 
 
 class VoxCPMRunner(BaseModelRunner):
@@ -36,7 +39,7 @@ class VoxCPMRunner(BaseModelRunner):
         config: Config[VoxCPMConfig],
         rank: int,
         device_idx: int,
-        distributed_port: int,
+        distributed_port: int | None,
         event: Event | list[Event],
     ):
         self.inference_timesteps = config.model_config.inference_timesteps
@@ -71,6 +74,7 @@ class VoxCPMRunner(BaseModelRunner):
             "feat_mask": torch.zeros(batch_size * length, dtype=torch.bool),
             "temperature": torch.zeros(batch_size),
             "cfg_value": torch.zeros(batch_size),
+            "z_noise": torch.zeros(batch_size, self.feat_dim, self.patch_size, dtype=self.dtype),
         }
 
     def make_dummy_outputs(self, batch_size: int) -> dict[str, torch.Tensor]:
@@ -133,9 +137,26 @@ class VoxCPMRunner(BaseModelRunner):
         inputs["cfg_value"] = (
             torch.tensor(cfg_values, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).to(self.dtype)
         )
+        bsz = len(seqs)
+        seeded_rows = [
+            (i, int(seq.custom_payload.seed), seq.custom_payload.seed_step)
+            for i, seq in enumerate(seqs)
+            if seq.custom_payload.seed is not None and seq.custom_payload.seed >= 0
+        ]
+        if len(seeded_rows) == bsz:
+            z_noise = torch.empty((bsz, self.feat_dim, self.patch_size), dtype=self.dtype, device="cuda")
+        else:
+            z_noise = torch.randn((bsz, self.feat_dim, self.patch_size), dtype=self.dtype, device="cuda")
+
+        for i, seed_val, seed_step in seeded_rows:
+            generator = torch.Generator(device="cuda").manual_seed(derive_step_seed(seed_val, seed_step))
+            z_noise[i] = torch.randn(
+                (self.feat_dim, self.patch_size), generator=generator, dtype=self.dtype, device="cuda"
+            )
+
+        inputs["z_noise"] = z_noise
 
         outputs = self.run_model(inputs, is_prefill)
-
         latents = outputs["latents"]
 
         pad_lengths = []

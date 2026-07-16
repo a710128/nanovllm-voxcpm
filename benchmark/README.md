@@ -5,7 +5,7 @@ End-to-end inference benchmarking for VoxCPM.
 ## Run
 
 ```bash
-uv run python benchmark/bench_inference.py --model ~/VoxCPM1.5 --concurrency 4 --iters 5 --warmup 1
+uv run python benchmark/bench_inference.py --model ~/VoxCPM1.5 --concurrency 4 --iters 5 --warmup 1 --seed 42
 ```
 
 Fixed-RPS TTFB (open-loop) for long-audio load:
@@ -28,9 +28,19 @@ Key flags:
 
 - `--concurrency`: number of concurrent `generate()` requests
 - `--max-generate-length`: maximum number of generation steps per request
-- `--devices`: CUDA devices, e.g. `0` or `0,1`
+- `--devices`: CUDA devices that exist locally, e.g. `0` or `0,1`
 - `--json-out`: write machine-readable results
 - `--max-loras`: enable LoRA when greater than `0` and register that many aliases from `--lora-path`
+- `--seed`: optional fixed random seed for reproducible generation
+
+Advanced KV-cache tuning:
+
+- `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` manually overrides automatic KV-cache sizing for in-process
+  benchmark runs. Leave it unset for the normal safe memory calculation.
+- On low-VRAM Windows development machines, this can be useful when you have validated a smaller block
+  count locally. For example, in PowerShell: `$env:NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS = "64"`.
+- Tensor parallelism is not supported on Windows; `--devices 0,1` requires both CUDA device ordinals to
+  exist and does not make a single-GPU machine emulate tensor parallelism.
 
 Closed-loop "N users" benchmark (each user sends the next request immediately after the previous finishes):
 

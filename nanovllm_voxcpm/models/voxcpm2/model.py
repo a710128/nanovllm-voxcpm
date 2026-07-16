@@ -2,7 +2,6 @@ import math
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 from torch import nn
 
 from nanovllm_voxcpm.layers.activation import SiluAndMul
@@ -23,6 +22,7 @@ from nanovllm_voxcpm.utils.context import (
     PROJ_LORA_DOMAIN,
     get_context,
 )
+from nanovllm_voxcpm.utils.distributed import get_tp_world_size
 
 
 class MiniCPMLongRoPE(nn.Module):
@@ -118,7 +118,7 @@ class Cpm4Attention(nn.Module):
         lora_domain: str = LM_LORA_DOMAIN,
     ) -> None:
         super().__init__()
-        tp_size = dist.get_world_size()
+        tp_size = get_tp_world_size()
         self.total_num_heads = num_heads
         self.total_num_kv_heads = num_kv_heads
         self.num_heads = self.total_num_heads // tp_size
@@ -431,9 +431,14 @@ class UnifiedCFM(nn.Module):
         cond: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         bsz = mu.shape[0]
-        z = torch.randn((bsz, self.in_channels, self.patch_size), device=mu.device, dtype=mu.dtype)
+        if z_noise is not None:
+            z = z_noise
+        else:
+            z = torch.randn((bsz, self.in_channels, self.patch_size), device=mu.device, dtype=mu.dtype)
+
         z = z * temperature[:, None, None]
         t_span = torch.linspace(1, 0, self.inference_timesteps + 1, device=mu.device, dtype=mu.dtype)
         t_span = t_span + (torch.cos(torch.pi / 2 * t_span) - 1 + t_span)
@@ -454,22 +459,25 @@ class UnifiedCFM(nn.Module):
     ):
         t, dt = t_span[0], t_span[0] - t_span[1]
         zero_init_steps = max(1, int(len(t_span) * 0.04))
+        bsz = x.size(0)
+        x_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
+        mu_in = torch.empty([2 * bsz, mu.size(1)], device=x.device, dtype=x.dtype)
+        t_in = torch.empty([2 * bsz], device=x.device, dtype=x.dtype)
+        dt_in = torch.empty([2 * bsz], device=x.device, dtype=x.dtype)
+        cond_in = torch.empty([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
         for step in range(1, len(t_span)):
             if step <= zero_init_steps:
                 dphi_dt = 0.0
             else:
-                bsz = x.size(0)
-                x_in = torch.zeros([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
-                mu_in = torch.zeros([2 * bsz, mu.size(1)], device=x.device, dtype=x.dtype)
-                t_in = torch.zeros([2 * bsz], device=x.device, dtype=x.dtype)
-                dt_in = torch.zeros([2 * bsz], device=x.device, dtype=x.dtype)
-                cond_in = torch.zeros([2 * bsz, self.in_channels, x.size(2)], device=x.device, dtype=x.dtype)
                 x_in[:bsz], x_in[bsz:] = x, x
                 mu_in[:bsz] = mu
-                t_in[:bsz], t_in[bsz:] = t.unsqueeze(0), t.unsqueeze(0)
-                dt_in[:bsz], dt_in[bsz:] = dt.unsqueeze(0), dt.unsqueeze(0)
+                mu_in[bsz:].zero_()
+                t_in[:bsz] = t.unsqueeze(0)
+                t_in[bsz:] = t.unsqueeze(0)
+                dt_in[:bsz] = dt.unsqueeze(0)
+                dt_in[bsz:] = dt.unsqueeze(0)
                 if not self.mean_mode:
-                    dt_in = torch.zeros_like(dt_in)
+                    dt_in.zero_()
                 cond_in[:bsz], cond_in[bsz:] = cond, cond
                 dphi_dt = self.estimator(x_in, mu_in, t_in, cond_in, dt_in)
                 dphi_dt, cfg_dphi_dt = torch.split(dphi_dt, [x.size(0), x.size(0)], dim=0)
@@ -636,6 +644,7 @@ class VoxCPM2Model(nn.Module):
         feat_mask: torch.Tensor,
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
+        z_noise: torch.Tensor | None = None,
     ):
         feat_embeds = self.enc_to_lm_proj(self.feat_encoder(feat))
         feat_embeds = torch.masked_fill(feat_embeds, feat_mask.unsqueeze(-1).logical_not(), 0)
@@ -669,6 +678,7 @@ class VoxCPM2Model(nn.Module):
             cond=prefix_feat_cond.transpose(1, 2).contiguous(),
             temperature=temperature,
             cfg_value=cfg_value,
+            z_noise=z_noise,
         ).transpose(1, 2)
         stop_flag = self.stop_head(self.stop_actn(self.stop_proj(lm_hidden))).argmax(dim=-1)
         return {"latents": pred_feat, "stop_flag": stop_flag}
