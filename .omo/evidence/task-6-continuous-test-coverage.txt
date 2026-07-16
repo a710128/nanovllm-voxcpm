@@ -1,0 +1,62 @@
+Task 6: Dedicated Combined-Coverage Job
+========================================
+Date: 2026-07-16
+
+## Acceptance Checks
+
+### 1. YAML validation
+$ uv run python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+Exit code: 0  (YAML_VALID=0 confirmed)
+
+### 2. grep -c "scripts/coverage.sh\|--cov" .github/workflows/ci.yml
+Result: 2
+  Line 187 (comment): # Coverage floor is enforced here only (--cov-fail-under=62 in the pytest invocation below).
+  Line 217 (run step): run: bash scripts/coverage.sh
+No --cov flag appears in the 7-entry matrix "Run tests" step.
+
+### 3. Matrix "Run tests" step
+      - name: Run tests
+        run: uv run --no-sync pytest -q
+(no --cov present)
+
+### 4. Jobs present in ci.yml
+  lint-cpu
+  test-cuda-no-gpu
+  coverage    ← NEW
+
+### 5. Coverage job properties
+  runs-on: ubuntu-latest
+  needs: []
+  Steps:
+    - Checkout with fetch-depth: 0
+    - Set up uv (python 3.11)
+    - Install system deps (ffmpeg, libsndfile1)
+    - Sync: uv sync --all-packages --group dev
+    - Run: bash scripts/coverage.sh  (threshold-free)
+    - Enforce floor: uv run --no-sync coverage report --fail-under=62
+    - Write coverage summary to $GITHUB_STEP_SUMMARY (if: always())
+    - Upload artifacts: coverage.xml + htmlcov/ (retention-days: 14, if: always())
+
+### 6. pyproject.toml dev group (diff-cover added)
+[dependency-groups]
+dev = [
+    "black==26.3.1",
+    "diff-cover>=9,<10",
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.14",
+]
+
+## Summary
+All acceptance criteria satisfied:
+  [x] coverage job present
+  [x] runs-on: ubuntu-latest (NOT CUDA container)
+  [x] installs with uv sync --all-packages --group dev
+  [x] runs bash scripts/coverage.sh (threshold-free)
+  [x] uploads coverage.xml + htmlcov/ as artifacts
+  [x] writes TOTAL to $GITHUB_STEP_SUMMARY (parsed from coverage report)
+  [x] 7-matrix entries have NO --cov
+  [x] grep count = 2 (comment + scripts/coverage.sh only)
+  [x] YAML valid (exit 0)
+  [x] diff-cover>=9,<10 added to pyproject.toml dev group
