@@ -41,7 +41,6 @@ _bootstrap_utils_module()
 # Now the canonical import works cleanly in every test.
 from nanovllm_voxcpm.models.voxcpm2.utils import mask_multichar_chinese_tokens  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -251,10 +250,10 @@ class TestMulticharTokenSetBuilding:
         """The multichar set excludes tokens with any non-CJK character."""
         tok = _DummyTokenizer(
             vocab={
-                "你好": 1,    # all CJK, len >= 2 -> IN multichar_tokens
-                "a好": 2,     # mixed -> NOT in multichar_tokens
-                "你": 3,      # single char -> NOT in multichar_tokens (len < 2)
-                "hello": 4,   # ASCII -> NOT in multichar_tokens
+                "你好": 1,  # all CJK, len >= 2 -> IN multichar_tokens
+                "a好": 2,  # mixed -> NOT in multichar_tokens
+                "你": 3,  # single char -> NOT in multichar_tokens (len < 2)
+                "hello": 4,  # ASCII -> NOT in multichar_tokens
                 "世界观": 5,  # all CJK, len 3 -> IN multichar_tokens
             },
             token_map={},

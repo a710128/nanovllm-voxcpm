@@ -14,10 +14,10 @@ import io
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared fake server helpers
 # ---------------------------------------------------------------------------
+
 
 class _FakeServer:
     """Minimal fake for AsyncVoxCPM2Server used inside pool tests."""
@@ -63,11 +63,13 @@ class _FakeServer:
         lora_name=None,
         seed=42,
     ):
-        self.generate_calls.append({
-            "target_text": target_text,
-            "lora_name": lora_name,
-            "ref_audio_latents": ref_audio_latents,
-        })
+        self.generate_calls.append(
+            {
+                "target_text": target_text,
+                "lora_name": lora_name,
+                "ref_audio_latents": ref_audio_latents,
+            }
+        )
         yield "chunk"
 
 
@@ -85,6 +87,7 @@ class _FailUnregisterServer(_FakeServer):
 # Helper: build a bare AsyncVoxCPM2ServerPool
 # ---------------------------------------------------------------------------
 
+
 def _make_pool(servers):
     from nanovllm_voxcpm.models.voxcpm2.server import AsyncVoxCPM2ServerPool
 
@@ -101,6 +104,7 @@ def _make_pool(servers):
 # gen_uuid
 # ---------------------------------------------------------------------------
 
+
 def test_gen_uuid_returns_hex_string():
     from nanovllm_voxcpm.models.voxcpm2.server import gen_uuid
 
@@ -113,6 +117,7 @@ def test_gen_uuid_returns_hex_string():
 # ---------------------------------------------------------------------------
 # VoxCPM2ServerImpl – unit-level (no engine)
 # ---------------------------------------------------------------------------
+
 
 class _FakeLLM:
     feat_dim = 4
@@ -207,6 +212,7 @@ def test_server_impl_cancel_and_step_and_is_finished():
 # ---------------------------------------------------------------------------
 # VoxCPM2ServerImpl.add_request – validation paths
 # ---------------------------------------------------------------------------
+
 
 def test_add_request_no_prompt_latents_no_prompt_text_ok():
     srv = _make_server_impl()
@@ -349,6 +355,7 @@ def test_encode_latents_mono_keeps_shape(monkeypatch):
 # AsyncVoxCPM2ServerPool – get_model_info empty-pool guard
 # ---------------------------------------------------------------------------
 
+
 async def _pool_get_model_info_empty():
     pool = _make_pool([])
     with pytest.raises(RuntimeError, match="empty"):
@@ -372,6 +379,7 @@ def test_pool_get_model_info_delegates_to_first_server():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPM2ServerPool – register_lora guards
 # ---------------------------------------------------------------------------
+
 
 async def _pool_register_lora_duplicate():
     pool = _make_pool([_FakeServer()])
@@ -415,6 +423,7 @@ def test_pool_register_lora_rolls_back_on_failure():
 # AsyncVoxCPM2ServerPool – unregister_lora guards
 # ---------------------------------------------------------------------------
 
+
 async def _pool_unregister_not_registered():
     pool = _make_pool([_FakeServer()])
     with pytest.raises(ValueError, match="not registered"):
@@ -454,6 +463,7 @@ def test_pool_unregister_lora_success():
 # AsyncVoxCPM2ServerPool – encode_latents routes to min-load server
 # ---------------------------------------------------------------------------
 
+
 async def _pool_encode_latents_routes_to_min_load():
     s0 = _FakeServer()
     s1 = _FakeServer()
@@ -474,6 +484,7 @@ def test_pool_encode_latents_routes_to_min_load_server():
 # AsyncVoxCPM2ServerPool – add_prompt and remove_prompt
 # ---------------------------------------------------------------------------
 
+
 async def _pool_add_and_remove_prompt():
     pool = _make_pool([_FakeServer()])
 
@@ -493,6 +504,7 @@ def test_pool_add_and_remove_prompt():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPM2ServerPool – generate with prompt_id validation
 # ---------------------------------------------------------------------------
+
 
 async def _pool_generate_unknown_prompt_id():
     pool = _make_pool([_FakeServer()])
@@ -601,6 +613,7 @@ def test_pool_generate_updates_load_counter():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPM2ServerPool – wait_for_ready and stop
 # ---------------------------------------------------------------------------
+
 
 class _FakeServerWithReadyStop(_FakeServer):
     def __init__(self):

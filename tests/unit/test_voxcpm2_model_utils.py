@@ -26,7 +26,6 @@ from nanovllm_voxcpm.models.voxcpm2.model_utils import (
     sinusoidal_pos_emb,
 )
 
-
 # ---------------------------------------------------------------------------
 # compute_rope_scaling_factor
 # ---------------------------------------------------------------------------
@@ -280,9 +279,7 @@ class TestComputeAttentionSizes:
         assert sizes["scaling"] == pytest.approx(8**-0.5)
 
     def test_explicit_head_dim_overrides_derived(self):
-        sizes = compute_attention_sizes(
-            hidden_size=64, total_num_heads=8, total_num_kv_heads=8, head_dim=16, tp_size=1
-        )
+        sizes = compute_attention_sizes(hidden_size=64, total_num_heads=8, total_num_kv_heads=8, head_dim=16, tp_size=1)
         assert sizes["head_dim"] == 16
         assert sizes["q_size"] == 128  # 8 * 16
         assert sizes["kv_size"] == 128
@@ -303,9 +300,7 @@ class TestComputeAttentionSizes:
 
     def test_kv_channels_override(self):
         # When head_dim is explicitly 4 (kv_channels), derive from it
-        sizes = compute_attention_sizes(
-            hidden_size=64, total_num_heads=8, total_num_kv_heads=2, head_dim=4, tp_size=1
-        )
+        sizes = compute_attention_sizes(hidden_size=64, total_num_heads=8, total_num_kv_heads=2, head_dim=4, tp_size=1)
         assert sizes["head_dim"] == 4
         assert sizes["kv_size"] == 8  # 2 * 4
 
@@ -493,8 +488,13 @@ class TestDeriveEncoderConfigFields:
 
     def test_none_kv_channels_preserved(self):
         fields = derive_encoder_config_fields(
-            lm_config_hidden_size=64, lm_config_intermediate_size=128, lm_config_num_attention_heads=4,
-            encoder_hidden_dim=8, encoder_ffn_dim=16, encoder_num_heads=2, encoder_num_layers=1,
+            lm_config_hidden_size=64,
+            lm_config_intermediate_size=128,
+            lm_config_num_attention_heads=4,
+            encoder_hidden_dim=8,
+            encoder_ffn_dim=16,
+            encoder_num_heads=2,
+            encoder_num_layers=1,
             encoder_kv_channels=None,
         )
         assert fields["kv_channels"] is None

@@ -1,5 +1,3 @@
-import math
-
 import torch
 from torch import nn
 from typing import Optional
@@ -27,11 +25,9 @@ from nanovllm_voxcpm.models.voxcpm.config import (
 )
 from nanovllm_voxcpm.models.voxcpm.model_utils import (
     apply_rotary_emb_tokens,
-    apply_rotary_pos_emb,
     compute_longrope_freqs,
     compute_longrope_scaling_factor,
     optimized_scale,
-    rotate_half,
     sinusoidal_pos_emb,
     sway_sampling_schedule,
 )

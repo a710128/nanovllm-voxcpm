@@ -12,10 +12,10 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_payload(T=3, P=4, D=8, seed=None, seed_step=0, padding_decode=None, temperature=1.0, cfg_value=1.5):
     from nanovllm_voxcpm.models.voxcpm.runner import VoxCPMPayload
@@ -50,6 +50,7 @@ def _make_runner(patch_size=4, feat_dim=8):
 # VoxCPMPayload dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestVoxCPMPayload:
     def test_default_values(self):
         from nanovllm_voxcpm.models.voxcpm.runner import VoxCPMPayload
@@ -79,6 +80,7 @@ class TestVoxCPMPayload:
 # ---------------------------------------------------------------------------
 # VoxCPMRunner shape methods (no GPU)
 # ---------------------------------------------------------------------------
+
 
 class TestVoxCPMRunnerDummyMethods:
     def test_dtype_is_bfloat16(self):
@@ -158,6 +160,7 @@ class TestVoxCPMRunnerDummyMethods:
 # runner_utils: collect_seeded_rows
 # ---------------------------------------------------------------------------
 
+
 class TestCollectSeededRows:
     def test_empty_list(self):
         from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
@@ -218,6 +221,7 @@ class TestCollectSeededRows:
 # runner_utils: compute_pad_lengths
 # ---------------------------------------------------------------------------
 
+
 class TestComputePadLengths:
     def test_all_none(self):
         from nanovllm_voxcpm.models.voxcpm.runner_utils import compute_pad_lengths
@@ -248,6 +252,7 @@ class TestComputePadLengths:
 # ---------------------------------------------------------------------------
 # runner_utils: assemble_batch_inputs
 # ---------------------------------------------------------------------------
+
 
 class TestAssembleBatchInputs:
     def test_single_seq_shapes(self):
@@ -297,6 +302,7 @@ class TestAssembleBatchInputs:
 # runner_utils: slice_waveforms
 # ---------------------------------------------------------------------------
 
+
 class TestSliceWaveforms:
     def test_no_padding(self):
         from nanovllm_voxcpm.models.voxcpm.runner_utils import slice_waveforms
@@ -342,6 +348,7 @@ class TestSliceWaveforms:
 # ---------------------------------------------------------------------------
 # runner_utils: assemble_run_outputs
 # ---------------------------------------------------------------------------
+
 
 class TestAssembleRunOutputs:
     def test_output_structure(self):

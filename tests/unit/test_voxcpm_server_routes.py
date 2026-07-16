@@ -17,10 +17,10 @@ import io
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared fake server helpers
 # ---------------------------------------------------------------------------
+
 
 class _FakeServer:
     """Minimal fake for AsyncVoxCPMServer used inside pool tests."""
@@ -81,6 +81,7 @@ class _FailUnregisterServer(_FakeServer):
 # Helper: build a bare AsyncVoxCPMServerPool
 # ---------------------------------------------------------------------------
 
+
 def _make_pool(servers):
     from nanovllm_voxcpm.models.voxcpm.server import AsyncVoxCPMServerPool
 
@@ -97,6 +98,7 @@ def _make_pool(servers):
 # gen_uuid
 # ---------------------------------------------------------------------------
 
+
 def test_gen_uuid_returns_hex_string():
     from nanovllm_voxcpm.models.voxcpm.server import gen_uuid
 
@@ -109,6 +111,7 @@ def test_gen_uuid_returns_hex_string():
 # ---------------------------------------------------------------------------
 # VoxCPMServerImpl – unit-level (no engine)
 # ---------------------------------------------------------------------------
+
 
 class _FakeLLM:
     feat_dim = 4
@@ -202,6 +205,7 @@ def test_server_impl_cancel_and_step_and_is_finished():
 # ---------------------------------------------------------------------------
 # VoxCPMServerImpl.add_request – validation paths
 # ---------------------------------------------------------------------------
+
 
 def test_add_request_no_prompt_latents_no_prompt_text_ok():
     srv = _make_server_impl()
@@ -320,6 +324,7 @@ def test_encode_latents_converts_stereo_to_mono(monkeypatch):
 # AsyncVoxCPMServerPool – get_model_info empty-pool guard
 # ---------------------------------------------------------------------------
 
+
 async def _pool_get_model_info_empty():
     pool = _make_pool([])
     with pytest.raises(RuntimeError, match="empty"):
@@ -343,6 +348,7 @@ def test_pool_get_model_info_delegates_to_first_server():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPMServerPool – register_lora duplicate guard
 # ---------------------------------------------------------------------------
+
 
 async def _pool_register_lora_duplicate():
     pool = _make_pool([_FakeServer()])
@@ -388,6 +394,7 @@ def test_pool_register_lora_rolls_back_on_failure():
 # AsyncVoxCPMServerPool – unregister_lora guards
 # ---------------------------------------------------------------------------
 
+
 async def _pool_unregister_not_registered():
     pool = _make_pool([_FakeServer()])
     with pytest.raises(ValueError, match="not registered"):
@@ -427,6 +434,7 @@ def test_pool_unregister_lora_success():
 # AsyncVoxCPMServerPool – encode_latents delegates to min-load server
 # ---------------------------------------------------------------------------
 
+
 async def _pool_encode_latents_routes_to_min_load():
     s0 = _FakeServer()
     s1 = _FakeServer()
@@ -447,6 +455,7 @@ def test_pool_encode_latents_routes_to_min_load_server():
 # AsyncVoxCPMServerPool – add_prompt and remove_prompt
 # ---------------------------------------------------------------------------
 
+
 async def _pool_add_and_remove_prompt():
     pool = _make_pool([_FakeServer()])
 
@@ -466,6 +475,7 @@ def test_pool_add_and_remove_prompt():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPMServerPool – generate with prompt_id validation
 # ---------------------------------------------------------------------------
+
 
 async def _pool_generate_unknown_prompt_id():
     pool = _make_pool([_FakeServer()])
@@ -560,6 +570,7 @@ def test_pool_generate_updates_load_counter():
 # ---------------------------------------------------------------------------
 # AsyncVoxCPMServerPool – wait_for_ready and stop delegate to servers
 # ---------------------------------------------------------------------------
+
 
 class _FakeServerWithReadyStop(_FakeServer):
     def __init__(self):

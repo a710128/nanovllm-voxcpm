@@ -71,7 +71,6 @@ def test_env_int_raises_for_non_integer():
         del os.environ["_TEST_NANOVLLM_ENV_INT"]
 
 
-
 def test_runner_task_with_adapter_id():
     from nanovllm_voxcpm.engine.model_runner import RunnerTask
 
@@ -106,7 +105,6 @@ def test_runner_task_exact_block_boundary():
     assert t.num_blocks == 2
     assert t.num_cached_blocks == 2
     assert t.last_block_num_tokens == 256
-
 
 
 def test_clear_lora_slot_modules_with_module_names_filter():
@@ -149,7 +147,6 @@ def test_clear_lora_slot_modules_with_missing_module_name_in_filter():
     model_runner._clear_lora_slot_modules({}, slot_id=0, module_names=["nonexistent"])
 
 
-
 def test_lora_model_modules_caches_and_returns_dict():
     import torch.nn as nn
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -174,7 +171,6 @@ def test_lora_model_modules_uses_existing_cache():
 
     result = runner._lora_model_modules()
     assert result is sentinel
-
 
 
 def test_dit_lora_rows_per_sample_no_lora_config():
@@ -213,7 +209,6 @@ def test_dit_lora_rows_per_sample_with_dit_enabled():
     assert runner._dit_lora_rows_per_sample() == 40
 
 
-
 def test_build_lora_contexts_no_adapters_returns_empty_lm_and_no_lora_flags():
     import nanovllm_voxcpm.engine.model_runner as model_runner
     from nanovllm_voxcpm.engine.lora_manager import LoRARuntime
@@ -224,12 +219,8 @@ def test_build_lora_contexts_no_adapters_returns_empty_lm_and_no_lora_flags():
     runner.lora_config = None
 
     seqs = [
-        model_runner.RunnerTask(
-            block_table=[0], seq_length=4, num_cached_tokens=0, block_size=4, adapter_id=None
-        ),
-        model_runner.RunnerTask(
-            block_table=[1], seq_length=2, num_cached_tokens=0, block_size=4, adapter_id=None
-        ),
+        model_runner.RunnerTask(block_table=[0], seq_length=4, num_cached_tokens=0, block_size=4, adapter_id=None),
+        model_runner.RunnerTask(block_table=[1], seq_length=2, num_cached_tokens=0, block_size=4, adapter_id=None),
     ]
     token_counts = [4, 2]
     contexts = runner._build_lora_contexts(seqs, token_counts)
@@ -245,7 +236,6 @@ def test_build_lora_contexts_no_adapters_returns_empty_lm_and_no_lora_flags():
     # LM context should have token_to_slot tensor of length 6 (all -1)
     lm_ctx = contexts[LM_LORA_DOMAIN]
     assert lm_ctx.token_to_slot is not None
-
 
 
 def test_unregister_lora_calls_lora_runtime():
@@ -269,7 +259,6 @@ def test_unregister_lora_calls_lora_runtime():
     # After draining-eligible unregister the entry should be removed (cpu_ref_count==0)
     with pytest.raises(KeyError):
         runner.lora_runtime.get_entry(10)
-
 
 
 def test_lora_lifecycle_calls_delegated_to_runtime():
@@ -303,7 +292,6 @@ def test_lora_lifecycle_calls_delegated_to_runtime():
     runner.lora_on_sequence_started(None)
     runner.lora_on_sequence_preempted(None)  # this will raise if it dereferences None
     runner.lora_on_sequence_finished(None, was_running=False)
-
 
 
 def test_validate_lora_payload_rejects_zero_rank():
@@ -364,7 +352,6 @@ def test_validate_lora_payload_rejects_non_lora_module():
         runner.validate_lora_payload(payload)
 
 
-
 def test_register_lora_mismatch_raises_runtime_error():
     import nanovllm_voxcpm.engine.model_runner as model_runner
     from nanovllm_voxcpm.engine.lora_manager import LoRAModelPayload, LoRARuntime
@@ -393,7 +380,6 @@ def test_register_lora_mismatch_raises_runtime_error():
     assert calls == [77]
 
 
-
 def test_call_single_rank_no_shm():
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
@@ -416,7 +402,6 @@ def test_call_single_rank_propagates_exception():
 
     with pytest.raises(ValueError, match="oops"):
         runner.call("bad_method")
-
 
 
 def test_synchronize_rpc_result_single_rank_success():
@@ -462,7 +447,6 @@ def test_synchronize_rpc_result_exit_with_error_raises():
         runner._synchronize_rpc_result("exit", exc)
 
 
-
 def test_prepare_prefill_context_slot_mapping_correctness(monkeypatch):
     """Verify positions, slot_mapping, cu_seqlens calculated for prefill."""
     import nanovllm_voxcpm.engine.model_runner as model_runner
@@ -470,8 +454,16 @@ def test_prepare_prefill_context_slot_mapping_correctness(monkeypatch):
 
     contexts_set = {}
 
-    def fake_set_context(is_prefill, cu_q=None, cu_k=None, max_q=None, max_k=None, slot_mapping=None,
-                         context_lens=None, block_tables=None):
+    def fake_set_context(
+        is_prefill,
+        cu_q=None,
+        cu_k=None,
+        max_q=None,
+        max_k=None,
+        slot_mapping=None,
+        context_lens=None,
+        block_tables=None,
+    ):
         contexts_set["is_prefill"] = is_prefill
         contexts_set["cu_q"] = cu_q.tolist() if cu_q is not None else None
         contexts_set["cu_k"] = cu_k.tolist() if cu_k is not None else None
@@ -485,9 +477,9 @@ def test_prepare_prefill_context_slot_mapping_correctness(monkeypatch):
 
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.block_size = 4
-    runner.lora_runtime = __import__(
-        "nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]
-    ).LoRARuntime(max_loras=0, max_lora_rank=1)
+    runner.lora_runtime = __import__("nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]).LoRARuntime(
+        max_loras=0, max_lora_rank=1
+    )
     runner.lora_config = None
 
     # Single seq: length=6, no prefix cache, block_table=[10, 11]
@@ -528,9 +520,9 @@ def test_prepare_prefill_context_with_prefix_cache(monkeypatch):
 
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.block_size = 4
-    runner.lora_runtime = __import__(
-        "nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]
-    ).LoRARuntime(max_loras=0, max_lora_rank=1)
+    runner.lora_runtime = __import__("nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]).LoRARuntime(
+        max_loras=0, max_lora_rank=1
+    )
     runner.lora_config = None
     runner.prepare_block_tables = fake_prepare_block_tables
 
@@ -553,8 +545,16 @@ def test_prepare_prefill_context_warmup_empty_block_table(monkeypatch):
 
     slot_mappings_captured = []
 
-    def fake_set_context(is_prefill, cu_q=None, cu_k=None, max_q=None, max_k=None, slot_mapping=None,
-                         context_lens=None, block_tables=None):
+    def fake_set_context(
+        is_prefill,
+        cu_q=None,
+        cu_k=None,
+        max_q=None,
+        max_k=None,
+        slot_mapping=None,
+        context_lens=None,
+        block_tables=None,
+    ):
         if slot_mapping is not None:
             slot_mappings_captured.append(slot_mapping.tolist())
 
@@ -566,9 +566,9 @@ def test_prepare_prefill_context_warmup_empty_block_table(monkeypatch):
 
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.block_size = 4
-    runner.lora_runtime = __import__(
-        "nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]
-    ).LoRARuntime(max_loras=0, max_lora_rank=1)
+    runner.lora_runtime = __import__("nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]).LoRARuntime(
+        max_loras=0, max_lora_rank=1
+    )
     runner.lora_config = None
 
     # warmup: empty block_table
@@ -582,7 +582,6 @@ def test_prepare_prefill_context_warmup_empty_block_table(monkeypatch):
 
     # slot_mapping should be empty (warmup path skips block iteration)
     assert slot_mappings_captured == [[]]
-
 
 
 def test_prepare_decode_context_positions_and_slot_mapping(monkeypatch):
@@ -607,9 +606,9 @@ def test_prepare_decode_context_positions_and_slot_mapping(monkeypatch):
 
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.block_size = 4
-    runner.lora_runtime = __import__(
-        "nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]
-    ).LoRARuntime(max_loras=0, max_lora_rank=1)
+    runner.lora_runtime = __import__("nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]).LoRARuntime(
+        max_loras=0, max_lora_rank=1
+    )
     runner.lora_config = None
     runner.prepare_block_tables = fake_prepare_block_tables
 
@@ -649,9 +648,9 @@ def test_prepare_decode_context_multiple_seqs(monkeypatch):
 
     runner = object.__new__(model_runner.BaseModelRunner)
     runner.block_size = 4
-    runner.lora_runtime = __import__(
-        "nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]
-    ).LoRARuntime(max_loras=0, max_lora_rank=1)
+    runner.lora_runtime = __import__("nanovllm_voxcpm.engine.lora_manager", fromlist=["LoRARuntime"]).LoRARuntime(
+        max_loras=0, max_lora_rank=1
+    )
     runner.lora_config = None
     runner.prepare_block_tables = fake_prepare_block_tables
 
@@ -661,7 +660,6 @@ def test_prepare_decode_context_multiple_seqs(monkeypatch):
     ]
     positions = runner.prepare_decode_context(seqs)
     assert positions.tolist() == [4, 8]
-
 
 
 def test_prepare_block_tables_pads_to_max_length(monkeypatch):
@@ -681,7 +679,6 @@ def test_prepare_block_tables_pads_to_max_length(monkeypatch):
     assert result.shape == (2, 3)
     assert result[0].tolist() == [1, 2, 3]
     assert result[1].tolist() == [5, -1, -1]
-
 
 
 def test_loop_runs_method_and_exits():
@@ -749,7 +746,6 @@ def test_loop_continues_on_method_error_then_rethrows_in_synchronize():
         runner.loop()
 
 
-
 def test_make_graph_domain_buffers_shapes():
     import nanovllm_voxcpm.engine.model_runner as model_runner
 
@@ -764,7 +760,6 @@ def test_make_graph_domain_buffers_shapes():
 
     assert (buffers["token_to_slot"] == -1).all()
     assert buffers["active_slot_ids"].tolist() == [-1, 0, 1]
-
 
 
 def test_write_shm_inline_small_payload():
@@ -796,7 +791,6 @@ def test_write_shm_inline_small_payload():
     finally:
         runner.shm.close()
         runner.shm.unlink()
-
 
 
 def test_call_cleans_up_overflow_path_even_when_file_missing():
@@ -888,6 +882,7 @@ def test_build_lora_contexts_with_active_adapter():
     def fake_build_batch_plan(adapter_ids, token_counts, load_lora):
         load_calls.append((adapter_ids, token_counts))
         from nanovllm_voxcpm.engine.lora_manager import LoRABatchPlan
+
         return LoRABatchPlan(
             adapter_to_slot={3: 0},
             token_to_slot=[0, 0, -1],
@@ -1252,7 +1247,6 @@ def test_copy_lora_domain_no_active_slot_ids_skips_scatter():
     runner._copy_lora_domain_to_graph_vars(graph_vars, LM_LORA_DOMAIN, ctx)
 
     assert (domain_vars["num_tokens_per_slot"] == 0).all()
-
 
 
 def test_allocate_kv_cache_env_override_negative_raises():

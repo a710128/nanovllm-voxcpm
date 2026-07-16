@@ -7,6 +7,7 @@ torch = pytest.importorskip("torch")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _patch_tp1(monkeypatch, linear_mod):
     """Monkeypatch TP helpers to single-GPU mode (rank=0, size=1)."""
     monkeypatch.setattr(linear_mod, "get_tp_rank", lambda: 0)
@@ -16,6 +17,7 @@ def _patch_tp1(monkeypatch, linear_mod):
 # ---------------------------------------------------------------------------
 # divide()
 # ---------------------------------------------------------------------------
+
 
 def test_divide_requires_exact_division():
     import nanovllm_voxcpm.layers.linear as linear
@@ -29,6 +31,7 @@ def test_divide_requires_exact_division():
 # LinearBase — not directly instantiable, but we verify the abstract stubs
 # ---------------------------------------------------------------------------
 
+
 def test_linear_base_forward_raises(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
 
@@ -38,6 +41,7 @@ def test_linear_base_forward_raises(monkeypatch):
     m = linear.ReplicatedLinear(4, 8)
     # weight_loader is overridden; calling the base version would raise
     import nanovllm_voxcpm.layers.linear as lin_mod
+
     base_instance = lin_mod.LinearBase.__new__(lin_mod.LinearBase)
     # Directly invoking the ABC stubs should raise NotImplementedError
     with pytest.raises((NotImplementedError, TypeError)):
@@ -49,6 +53,7 @@ def test_linear_base_forward_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 # ReplicatedLinear
 # ---------------------------------------------------------------------------
+
 
 def test_replicated_linear_constructor_no_bias(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
@@ -107,6 +112,7 @@ def test_replicated_linear_forward_with_bias(monkeypatch):
 # ColumnParallelLinear — tp_size=1
 # ---------------------------------------------------------------------------
 
+
 def test_column_parallel_linear_constructor_tp1(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
 
@@ -142,6 +148,7 @@ def test_column_parallel_linear_forward_tp1(monkeypatch):
 # ColumnParallelLinear — tp_size=2 weight loader (no distributed calls needed)
 # ---------------------------------------------------------------------------
 
+
 def test_column_parallel_linear_weight_loader_shards(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
 
@@ -165,6 +172,7 @@ def test_column_parallel_linear_weight_loader_shards(monkeypatch):
 # ---------------------------------------------------------------------------
 # MergedColumnParallelLinear
 # ---------------------------------------------------------------------------
+
 
 def test_merged_column_parallel_linear_constructor_tp1(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
@@ -217,6 +225,7 @@ def test_merged_column_parallel_linear_forward_tp1(monkeypatch):
 # ---------------------------------------------------------------------------
 # QKVParallelLinear
 # ---------------------------------------------------------------------------
+
 
 def test_qkv_parallel_linear_constructor_tp1(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear
@@ -306,6 +315,7 @@ def test_qkv_parallel_linear_forward_tp1(monkeypatch):
 # ---------------------------------------------------------------------------
 # RowParallelLinear — tp_size=1
 # ---------------------------------------------------------------------------
+
 
 def test_row_parallel_linear_constructor_tp1(monkeypatch):
     import nanovllm_voxcpm.layers.linear as linear

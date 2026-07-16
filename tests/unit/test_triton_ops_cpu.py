@@ -183,7 +183,7 @@ class TestGetLoraAPtr:
         from nanovllm_voxcpm.lora_ops.triton_ops.utils import _get_lora_a_ptr
 
         # Two weights with different innermost dimension → different strides
-        w1 = torch.randn(2, 4, 8).contiguous()   # stride(2) = 1
+        w1 = torch.randn(2, 4, 8).contiguous()  # stride(2) = 1
         w2 = torch.randn(2, 4, 16).contiguous()  # stride(1) = 16 ≠ 8
 
         with pytest.raises(ValueError, match="same stride"):
@@ -233,11 +233,11 @@ class TestGetLoraBPtr:
 
         # Two weights with different hidden sizes → different strides d1, and
         # different hidden_sizes → heterogeneous path
-        w1 = torch.randn(2, 4, 4).contiguous()   # hidden=4
-        w2 = torch.randn(2, 8, 4).contiguous()   # hidden=8 — different size(1)
+        w1 = torch.randn(2, 4, 4).contiguous()  # hidden=4
+        w2 = torch.randn(2, 8, 4).contiguous()  # hidden=8 — different size(1)
 
         result = _get_lora_b_ptr([w1, w2], offset_start=0, device=torch.device("cpu"))
-        (slice_start_tensor, lora_ptr_tensor, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n) = result
+        slice_start_tensor, lora_ptr_tensor, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n = result
 
         assert same_stride is False
         assert isinstance(d0, torch.Tensor)
@@ -254,7 +254,7 @@ class TestGetLoraBPtr:
         w2 = torch.randn(2, 8, 4).contiguous()
 
         result = _get_lora_b_ptr([w1, w2], offset_start=0, device=torch.device("cpu"))
-        (slice_start_tensor, lora_ptr_tensor, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n) = result
+        slice_start_tensor, lora_ptr_tensor, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n = result
 
         assert same_stride is True
         assert isinstance(d0, int)
@@ -281,11 +281,11 @@ class TestGetLoraBPtr:
         """4-D weights with different hidden sizes trigger both squeeze AND heterogeneous strides."""
         from nanovllm_voxcpm.lora_ops.triton_ops.utils import _get_lora_b_ptr
 
-        w1 = torch.randn(2, 1, 4, 4).contiguous()   # 4-D, hidden=4
-        w2 = torch.randn(2, 1, 8, 4).contiguous()   # 4-D, hidden=8
+        w1 = torch.randn(2, 1, 4, 4).contiguous()  # 4-D, hidden=4
+        w2 = torch.randn(2, 1, 8, 4).contiguous()  # 4-D, hidden=8
 
         result = _get_lora_b_ptr([w1, w2], offset_start=0, device=torch.device("cpu"))
-        (_, _, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n) = result
+        _, _, d0, d1, d2, hidden_sizes_tensor, same_stride, max_n = result
 
         assert same_stride is False
         assert max_n == 8
