@@ -46,6 +46,29 @@ def _make_runner(patch_size=4, feat_dim=8):
     return r
 
 
+def _install_cpu_tensor_shims(monkeypatch):
+    original_randn = torch.randn
+    original_tensor = torch.tensor
+    original_zeros = torch.zeros
+
+    def cpu_randn(*args, **kwargs):
+        kwargs.pop("device", None)
+        return original_randn(*args, **kwargs)
+
+    def cpu_tensor(*args, **kwargs):
+        kwargs.pop("pin_memory", None)
+        return original_tensor(*args, **kwargs)
+
+    def cpu_zeros(*args, **kwargs):
+        kwargs.pop("device", None)
+        return original_zeros(*args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "cuda", lambda self, non_blocking=True: self, raising=False)
+    monkeypatch.setattr(torch, "randn", cpu_randn)
+    monkeypatch.setattr(torch, "tensor", cpu_tensor)
+    monkeypatch.setattr(torch, "zeros", cpu_zeros)
+
+
 # ---------------------------------------------------------------------------
 # VoxCPMPayload dataclass
 # ---------------------------------------------------------------------------
@@ -155,244 +178,61 @@ class TestVoxCPMRunnerDummyMethods:
         assert out["latents"].sum().item() == 0.0
         assert out["stop_flag"].sum().item() == 0
 
+    @pytest.mark.parametrize("is_prefill", [True, False])
+    def test_run_assembles_inputs_and_outputs_on_cpu(self, monkeypatch, is_prefill):
+        _install_cpu_tensor_shims(monkeypatch)
+        runner = _make_runner(patch_size=2, feat_dim=3)
+        prepared = []
+        captured = {}
+        runner.prepare_prefill_context = lambda seqs: prepared.append("prefill") or torch.tensor([0, 1])
+        runner.prepare_decode_context = lambda seqs: prepared.append("decode") or torch.tensor([2, 3])
 
-# ---------------------------------------------------------------------------
-# runner_utils: collect_seeded_rows
-# ---------------------------------------------------------------------------
+        latents = torch.arange(12, dtype=torch.float32).reshape(2, 2, 3)
 
+        def run_model(inputs, actual_is_prefill):
+            captured.update(inputs)
+            captured["is_prefill"] = actual_is_prefill
+            return {"latents": latents, "stop_flag": torch.tensor([0, 1])}
 
-class TestCollectSeededRows:
-    def test_empty_list(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
+        runner.run_model = run_model
 
-        assert collect_seeded_rows([]) == []
+        class FakeVAE:
+            chunk_size = 2
 
-    def test_no_seeds(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
+            def decode(self, inputs):
+                captured["vae_inputs"] = inputs
+                return torch.arange(24, dtype=torch.float32).reshape(2, 1, 12)
 
-        tasks = [_FakeTask(_make_payload(seed=None)) for _ in range(3)]
-        assert collect_seeded_rows(tasks) == []
-
-    def test_negative_seed_excluded(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
-
-        tasks = [_FakeTask(_make_payload(seed=-1, seed_step=0))]
-        assert collect_seeded_rows(tasks) == []
-
-    def test_zero_seed_included(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
-
-        tasks = [_FakeTask(_make_payload(seed=0, seed_step=5))]
-        result = collect_seeded_rows(tasks)
-        assert result == [(0, 0, 5)]
-
-    def test_positive_seed_included(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
-
-        tasks = [_FakeTask(_make_payload(seed=42, seed_step=3))]
-        result = collect_seeded_rows(tasks)
-        assert result == [(0, 42, 3)]
-
-    def test_mixed_seeds_correct_indices(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
-
+        runner.vae = FakeVAE()
+        padding = np.full((1, 3), 7.0, dtype=np.float32)
         tasks = [
-            _FakeTask(_make_payload(seed=None)),
-            _FakeTask(_make_payload(seed=10, seed_step=1)),
-            _FakeTask(_make_payload(seed=-5)),
-            _FakeTask(_make_payload(seed=99, seed_step=7)),
+            _FakeTask(_make_payload(T=1, P=2, D=3, temperature=0.5, cfg_value=1.5)),
+            _FakeTask(_make_payload(T=1, P=2, D=3, padding_decode=padding, temperature=0.8, cfg_value=2.0)),
         ]
-        result = collect_seeded_rows(tasks)
-        assert result == [(1, 10, 1), (3, 99, 7)]
 
-    def test_all_seeded(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import collect_seeded_rows
+        outputs = runner.run(tasks, is_prefill=is_prefill)
 
-        tasks = [_FakeTask(_make_payload(seed=i, seed_step=i * 2)) for i in range(4)]
-        result = collect_seeded_rows(tasks)
-        assert len(result) == 4
-        for i, (idx, seed_val, step) in enumerate(result):
-            assert idx == i
-            assert seed_val == i
-            assert step == i * 2
+        assert prepared == ["prefill" if is_prefill else "decode"]
+        assert captured["is_prefill"] is is_prefill
+        assert captured["text_tokens"].shape == (2,)
+        assert captured["feat"].shape == (2, 2, 3)
+        assert captured["temperature"].tolist() == pytest.approx([0.5, 0.8], abs=0.01)
+        assert captured["cfg_value"].tolist() == pytest.approx([1.5, 2.0], abs=0.01)
+        assert captured["z_noise"].shape == (2, 3, 2)
+        assert captured["vae_inputs"].shape == (2, 3, 3)
+        assert captured["vae_inputs"][1, :, 0].tolist() == [7.0, 7.0, 7.0]
+        assert captured["vae_inputs"][1, :, 1].tolist() == [6.0, 7.0, 8.0]
+        assert captured["vae_inputs"][1, :, 2].tolist() == [9.0, 10.0, 11.0]
+        assert [output["stop_flag"] for output in outputs] == [0, 1]
+        np.testing.assert_array_equal(outputs[0]["latents"], latents[0].numpy())
+        np.testing.assert_array_equal(outputs[0]["waveforms"], np.arange(4, dtype=np.float32))
+        np.testing.assert_array_equal(outputs[1]["waveforms"], np.arange(14, 18, dtype=np.float32))
 
+    def test_run_rejects_mismatched_payload_shapes_before_cuda(self):
+        runner = _make_runner(patch_size=2, feat_dim=3)
+        runner.prepare_decode_context = lambda seqs: torch.tensor([0])
+        payload = _make_payload(T=2, P=2, D=3)
+        payload.feats = np.zeros((1, 2, 3), dtype=np.float32)
 
-# ---------------------------------------------------------------------------
-# runner_utils: compute_pad_lengths
-# ---------------------------------------------------------------------------
-
-
-class TestComputePadLengths:
-    def test_all_none(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import compute_pad_lengths
-
-        tasks = [_FakeTask(_make_payload(padding_decode=None)) for _ in range(3)]
-        assert compute_pad_lengths(tasks) == [0, 0, 0]
-
-    def test_mixed_padding(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import compute_pad_lengths
-
-        pad2 = np.zeros((2, 8), dtype=np.float32)
-        pad5 = np.zeros((5, 8), dtype=np.float32)
-        tasks = [
-            _FakeTask(_make_payload(padding_decode=None)),
-            _FakeTask(_make_payload(padding_decode=pad2)),
-            _FakeTask(_make_payload(padding_decode=pad5)),
-        ]
-        assert compute_pad_lengths(tasks) == [0, 2, 5]
-
-    def test_single_with_padding(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import compute_pad_lengths
-
-        pad = np.zeros((7, 8), dtype=np.float32)
-        tasks = [_FakeTask(_make_payload(padding_decode=pad))]
-        assert compute_pad_lengths(tasks) == [7]
-
-
-# ---------------------------------------------------------------------------
-# runner_utils: assemble_batch_inputs
-# ---------------------------------------------------------------------------
-
-
-class TestAssembleBatchInputs:
-    def test_single_seq_shapes(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_batch_inputs
-
-        tasks = [_FakeTask(_make_payload(T=3, P=4, D=8, temperature=0.5, cfg_value=2.0))]
-        tt, feats, masks, temps, cfgs = assemble_batch_inputs(tasks)
-        assert tt.shape == (3,)
-        assert feats.shape == (3, 4, 8)
-        assert masks.shape == (3,)
-        assert temps == [0.5]
-        assert cfgs == [2.0]
-
-    def test_two_seqs_concatenated(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_batch_inputs
-
-        p1 = _make_payload(T=2, P=4, D=8, temperature=1.0, cfg_value=1.0)
-        p2 = _make_payload(T=3, P=4, D=8, temperature=0.8, cfg_value=1.5)
-        tasks = [_FakeTask(p1), _FakeTask(p2)]
-        tt, feats, masks, temps, cfgs = assemble_batch_inputs(tasks)
-        assert tt.shape == (5,)
-        assert feats.shape == (5, 4, 8)
-        assert masks.shape == (5,)
-        assert temps == [1.0, 0.8]
-        assert cfgs == [1.0, 1.5]
-
-    def test_values_preserved(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_batch_inputs
-        from nanovllm_voxcpm.models.voxcpm.runner import VoxCPMPayload
-
-        arr = np.array([7, 8, 9], dtype=np.int64)
-        p = VoxCPMPayload(
-            text_tokens=arr,
-            feats=np.ones((3, 2, 4), dtype=np.float32),
-            feat_masks=np.array([True, False, True], dtype=np.bool_),
-            temperature=0.3,
-            cfg_value=3.0,
-        )
-        tt, feats, masks, temps, cfgs = assemble_batch_inputs([_FakeTask(p)])
-        np.testing.assert_array_equal(tt, arr)
-        assert temps == [0.3]
-        assert cfgs == [3.0]
-        np.testing.assert_array_equal(masks, [True, False, True])
-
-
-# ---------------------------------------------------------------------------
-# runner_utils: slice_waveforms
-# ---------------------------------------------------------------------------
-
-
-class TestSliceWaveforms:
-    def test_no_padding(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import slice_waveforms
-
-        patch_size = 2
-        chunk_size = 4
-        bsz = 2
-        total = patch_size * chunk_size
-        vae_out = np.arange(bsz * total, dtype=np.float32).reshape(bsz, total)
-        result = slice_waveforms(vae_out, [0, 0], patch_size, chunk_size)
-        assert len(result) == 2
-        np.testing.assert_array_equal(result[0], vae_out[0, :total])
-        np.testing.assert_array_equal(result[1], vae_out[1, :total])
-
-    def test_with_padding_slices_correctly(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import slice_waveforms
-
-        patch_size = 1
-        chunk_size = 3
-        pad = 2
-        total = (pad + patch_size) * chunk_size
-        vae_out = np.arange(total, dtype=np.float32).reshape(1, total)
-        result = slice_waveforms(vae_out, [pad], patch_size, chunk_size)
-        expected = vae_out[0, pad * chunk_size : (pad + patch_size) * chunk_size]
-        np.testing.assert_array_equal(result[0], expected)
-
-    def test_mixed_padding_batch(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import slice_waveforms
-
-        patch_size = 2
-        chunk_size = 5
-        pad_lengths = [0, 3]
-        max_pad = max(pad_lengths)
-        total = (max_pad + patch_size) * chunk_size
-        bsz = 2
-        vae_out = np.ones((bsz, total), dtype=np.float32)
-        result = slice_waveforms(vae_out, pad_lengths, patch_size, chunk_size)
-        assert len(result) == 2
-        assert result[0].shape == (patch_size * chunk_size,)
-        assert result[1].shape == (patch_size * chunk_size,)
-
-
-# ---------------------------------------------------------------------------
-# runner_utils: assemble_run_outputs
-# ---------------------------------------------------------------------------
-
-
-class TestAssembleRunOutputs:
-    def test_output_structure(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_run_outputs
-
-        latents = np.zeros((2, 4, 8), dtype=np.float32)
-        stop_flags = [0, 1]
-        waveforms = [np.ones(10, dtype=np.float32), np.zeros(10, dtype=np.float32)]
-        result = assemble_run_outputs(latents, stop_flags, waveforms)
-        assert len(result) == 2
-        assert set(result[0].keys()) == {"latents", "stop_flag", "waveforms"}
-        assert set(result[1].keys()) == {"latents", "stop_flag", "waveforms"}
-
-    def test_stop_flag_values(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_run_outputs
-
-        latents = np.zeros((2, 4, 8), dtype=np.float32)
-        stop_flags = [0, 1]
-        waveforms = [np.zeros(5), np.zeros(5)]
-        result = assemble_run_outputs(latents, stop_flags, waveforms)
-        assert result[0]["stop_flag"] == 0
-        assert result[1]["stop_flag"] == 1
-
-    def test_latents_per_sequence(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_run_outputs
-
-        latents = np.arange(16, dtype=np.float32).reshape(2, 2, 4)
-        result = assemble_run_outputs(latents, [0, 0], [np.zeros(5), np.zeros(5)])
-        np.testing.assert_array_equal(result[0]["latents"], latents[0])
-        np.testing.assert_array_equal(result[1]["latents"], latents[1])
-
-    def test_waveforms_per_sequence(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_run_outputs
-
-        wav0 = np.array([1.0, 2.0], dtype=np.float32)
-        wav1 = np.array([3.0, 4.0], dtype=np.float32)
-        result = assemble_run_outputs(np.zeros((2, 2, 4)), [0, 0], [wav0, wav1])
-        np.testing.assert_array_equal(result[0]["waveforms"], wav0)
-        np.testing.assert_array_equal(result[1]["waveforms"], wav1)
-
-    def test_single_sequence(self):
-        from nanovllm_voxcpm.models.voxcpm.runner_utils import assemble_run_outputs
-
-        latents = np.ones((1, 3, 6), dtype=np.float32)
-        result = assemble_run_outputs(latents, [1], [np.zeros(8)])
-        assert len(result) == 1
-        assert result[0]["stop_flag"] == 1
+        with pytest.raises(AssertionError):
+            runner.run([_FakeTask(payload)], is_prefill=False)
