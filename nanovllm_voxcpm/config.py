@@ -9,12 +9,15 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class CUDAGraphMode(str, Enum):
-    FULL = "full"
-    DECODE_ONLY = "decode_only"
-    DISABLED = "disabled"
+    """Select which inference CUDA Graph paths are enabled."""
+
+    FULL = "full"  # Capture both decode and prefill diffusion graphs.
+    DECODE_ONLY = "decode_only"  # Keep decode graphs; run prefill diffusion eagerly.
+    DISABLED = "disabled"  # Disable all CUDA Graphs and run the model eagerly.
 
 
 def resolve_cudagraph_mode(*, enforce_eager: bool, enforce_dit_prefill_eager: bool) -> CUDAGraphMode:
+    """Resolve user-facing eager flags, with full eager mode taking precedence."""
     if enforce_eager:
         return CUDAGraphMode.DISABLED
     if enforce_dit_prefill_eager:
