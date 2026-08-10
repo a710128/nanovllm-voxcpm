@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from nanovllm_voxcpm.config import CUDAGraphMode, resolve_cudagraph_mode
+
 ALL_LINEAR_LORA_TARGETS = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 VOXCPM_PROJ_LORA_TARGETS = ("enc_to_lm_proj", "lm_to_dit_proj", "res_to_dit_proj")
 VOXCPM2_PROJ_LORA_TARGETS = (*VOXCPM_PROJ_LORA_TARGETS, "fusion_concat_proj")
@@ -83,8 +85,7 @@ class ServerPoolStartupConfig:
     max_num_seqs: int
     max_model_len: int
     gpu_memory_utilization: float
-    enforce_eager: bool
-    enable_prefill_diffusion_cudagraph: bool
+    cudagraph_mode: CUDAGraphMode
     devices: tuple[int, ...]
     inference_timesteps: int = 10
 
@@ -176,9 +177,7 @@ def load_config() -> ServiceConfig:
     pool_max_model_len = _get_int_env("NANOVLLM_SERVERPOOL_MAX_MODEL_LEN", 4096)
     pool_gpu_memory_utilization = _get_float_env("NANOVLLM_SERVERPOOL_GPU_MEMORY_UTILIZATION", 0.95)
     pool_enforce_eager = _get_bool_env("NANOVLLM_SERVERPOOL_ENFORCE_EAGER", False)
-    pool_enable_prefill_diffusion_cudagraph = _get_bool_env(
-        "NANOVLLM_SERVERPOOL_ENABLE_PREFILL_DIFFUSION_CUDAGRAPH", True
-    )
+    pool_enforce_dit_prefill_eager = _get_bool_env("NANOVLLM_SERVERPOOL_ENFORCE_DIT_PREFILL_EAGER", False)
     pool_devices = _get_int_list_env("NANOVLLM_SERVERPOOL_DEVICES", (0,))
     pool_inference_timesteps = _get_int_env("NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS", 10)
 
@@ -205,8 +204,10 @@ def load_config() -> ServiceConfig:
             max_num_seqs=pool_max_num_seqs,
             max_model_len=pool_max_model_len,
             gpu_memory_utilization=pool_gpu_memory_utilization,
-            enforce_eager=pool_enforce_eager,
-            enable_prefill_diffusion_cudagraph=pool_enable_prefill_diffusion_cudagraph,
+            cudagraph_mode=resolve_cudagraph_mode(
+                enforce_eager=pool_enforce_eager,
+                enforce_dit_prefill_eager=pool_enforce_dit_prefill_eager,
+            ),
             devices=pool_devices,
             inference_timesteps=pool_inference_timesteps,
         ),

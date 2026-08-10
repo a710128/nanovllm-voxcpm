@@ -16,7 +16,7 @@ import torch.multiprocessing as mp
 from numpy.typing import NDArray
 from typing_extensions import Literal, TypedDict
 
-from nanovllm_voxcpm.config import Config
+from nanovllm_voxcpm.config import CUDAGraphMode, Config
 from nanovllm_voxcpm.models.voxcpm2.config import LoRAConfig, VoxCPM2Config
 from nanovllm_voxcpm.models.voxcpm2.engine import VoxCPM2Engine
 from nanovllm_voxcpm.models.voxcpm2.runner import VoxCPM2Runner
@@ -63,10 +63,9 @@ class VoxCPM2ServerImpl:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
-        enable_prefill_diffusion_cudagraph: bool = True,
     ):
         model_config = VoxCPM2Config.model_validate_json(open(os.path.join(model_path, "config.json")).read())
         model_config.inference_timesteps = inference_timesteps
@@ -79,8 +78,7 @@ class VoxCPM2ServerImpl:
             max_num_seqs=max_num_seqs,
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
-            enforce_eager=enforce_eager,
-            enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
+            cudagraph_mode=cudagraph_mode,
             model_config=model_config,
             devices=devices,
             lora_config=lora_config,
@@ -269,10 +267,9 @@ class AsyncVoxCPM2Server:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
-        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ) -> None:
         if len(kwargs) > 0:
@@ -292,10 +289,9 @@ class AsyncVoxCPM2Server:
                     max_num_seqs,
                     max_model_len,
                     gpu_memory_utilization,
-                    enforce_eager,
+                    cudagraph_mode,
                     devices,
                     lora_config,
-                    enable_prefill_diffusion_cudagraph,
                 ),
                 {},
             ),
@@ -481,10 +477,9 @@ class AsyncVoxCPM2ServerPool:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
-        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ):
         if len(kwargs) > 0:
@@ -497,10 +492,9 @@ class AsyncVoxCPM2ServerPool:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=[device_idx],
                 lora_config=lora_config,
-                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
             )
             for device_idx in devices
         ]
@@ -624,10 +618,9 @@ class SyncVoxCPM2ServerPool:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
-        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ):
         async def init_async_server_pool():
@@ -638,10 +631,9 @@ class SyncVoxCPM2ServerPool:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=devices,
                 lora_config=lora_config,
-                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
                 **kwargs,
             )
 

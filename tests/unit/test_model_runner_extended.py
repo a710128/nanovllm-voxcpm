@@ -1123,19 +1123,18 @@ def test_exit_single_rank_non_eager_deletes_graphs(monkeypatch):
 
 
 def test_prefill_diffusion_cudagraph_can_be_disabled_independently():
-    from types import SimpleNamespace
-
+    from nanovllm_voxcpm.config import CUDAGraphMode
     from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
 
     runner = object.__new__(BaseModelRunner)
     capture_calls = []
     runner.capture_prefill_diffusion_cudagraph = lambda: capture_calls.append(True)
 
-    runner._config = SimpleNamespace(enable_prefill_diffusion_cudagraph=False)
+    runner.cudagraph_mode = CUDAGraphMode.DECODE_ONLY
     runner._maybe_capture_prefill_diffusion_cudagraph()
     assert capture_calls == []
 
-    runner._config.enable_prefill_diffusion_cudagraph = True
+    runner.cudagraph_mode = CUDAGraphMode.FULL
     runner._maybe_capture_prefill_diffusion_cudagraph()
     assert capture_calls == [True]
 
