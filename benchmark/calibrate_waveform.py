@@ -73,6 +73,7 @@ async def async_main(args: argparse.Namespace) -> None:
         gpu_memory_utilization=0.9,
         devices=[args.device],
         enforce_eager=args.enforce_eager,
+        enable_prefill_diffusion_cudagraph=not args.disable_prefill_diffusion_cudagraph,
     )
 
     async def generate_one(seed: int) -> np.ndarray:
@@ -144,6 +145,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument("--disable-prefill-diffusion-cudagraph", action="store_true")
     parser.add_argument("--allow-length-mismatch", action="store_true")
     parser.add_argument("--max-rmse", type=float)
     parser.add_argument("--max-abs-error", type=float)

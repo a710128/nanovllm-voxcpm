@@ -1090,7 +1090,11 @@ class BaseModelRunner:
             lora_domains=lora_domains,
             outputs=outputs,
         )
-        self.capture_prefill_diffusion_cudagraph()
+        self._maybe_capture_prefill_diffusion_cudagraph()
+
+    def _maybe_capture_prefill_diffusion_cudagraph(self) -> None:
+        if self._config.enable_prefill_diffusion_cudagraph:
+            self.capture_prefill_diffusion_cudagraph()
 
     @torch.inference_mode()
     def capture_prefill_diffusion_cudagraph(self) -> None:

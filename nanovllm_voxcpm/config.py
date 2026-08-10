@@ -21,6 +21,7 @@ class Config(Generic[T]):
     model_config: T | None = None
     devices: List[int] | None = None
     lora_config: Any = None  # Optional[LoRAConfig]
+    enable_prefill_diffusion_cudagraph: bool = True
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

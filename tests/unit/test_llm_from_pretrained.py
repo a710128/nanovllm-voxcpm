@@ -55,10 +55,11 @@ def test_from_pretrained_uses_local_path_and_dispatches(
     sys.modules.pop("nanovllm_voxcpm.llm", None)
     llm = importlib.import_module("nanovllm_voxcpm.llm")
 
-    obj = llm.VoxCPM.from_pretrained(model=str(model_dir))
+    obj = llm.VoxCPM.from_pretrained(model=str(model_dir), enable_prefill_diffusion_cudagraph=False)
     assert isinstance(obj, SyncServerPool)
     assert obj.kwargs["model_path"] == str(model_dir)
     assert obj.kwargs["devices"] == [0]
+    assert obj.kwargs["enable_prefill_diffusion_cudagraph"] is False
 
 
 def test_from_pretrained_downloads_remote_model_and_uses_async_pool(monkeypatch, tmp_path):
@@ -103,6 +104,7 @@ def test_from_pretrained_downloads_remote_model_and_uses_async_pool(monkeypatch,
     assert isinstance(obj, AsyncServerPool)
     assert obj.kwargs["model_path"] == str(downloaded_dir)
     assert obj.kwargs["devices"] == [3]
+    assert obj.kwargs["enable_prefill_diffusion_cudagraph"] is True
     assert obj.kwargs["extra_flag"] is True
 
 

@@ -301,6 +301,7 @@ def test_runner_lora_cuda_graph_replay_supports_active_lora_count_changes():
         max_num_seqs=8,
         max_model_len=8,
         lora_config=SimpleNamespace(max_loras=2, max_lora_rank=1),
+        enable_prefill_diffusion_cudagraph=False,
     )
     with torch.no_grad():
         runner.model.proj.weight.zero_()
@@ -399,6 +400,7 @@ def test_lora_capture_cudagraph_keeps_python_host_flags():
         max_num_seqs=8,
         max_model_len=8,
         lora_config=SimpleNamespace(max_loras=1, max_lora_rank=2),
+        enable_prefill_diffusion_cudagraph=True,
     )
 
     default_device = torch.empty(()).device
@@ -435,6 +437,7 @@ def test_lora_capture_cudagraph_respects_max_num_seqs_below_eight():
         max_num_seqs=4,
         max_model_len=8,
         lora_config=SimpleNamespace(max_loras=1, max_lora_rank=2),
+        enable_prefill_diffusion_cudagraph=True,
     )
 
     default_device = torch.empty(()).device

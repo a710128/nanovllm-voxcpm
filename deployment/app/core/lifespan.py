@@ -46,6 +46,7 @@ def build_lifespan(cfg: ServiceConfig):
             max_model_len=cfg.server_pool.max_model_len,
             gpu_memory_utilization=cfg.server_pool.gpu_memory_utilization,
             enforce_eager=cfg.server_pool.enforce_eager,
+            enable_prefill_diffusion_cudagraph=cfg.server_pool.enable_prefill_diffusion_cudagraph,
             devices=list(cfg.server_pool.devices),
             inference_timesteps=cfg.server_pool.inference_timesteps,
             lora_config=lora_config,

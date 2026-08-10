@@ -297,7 +297,8 @@ Memory note: this release adds a prefill diffusion CUDA graph that improves late
 but increases steady-state VRAM by roughly 2.5 GB (the extra graph pool is not yet accounted for
 in the automatic KV-cache budget). On a 24 GB card at high concurrency with LoRA (e.g. short
 prompt @ 128, long prompt @ 64), the default `gpu_memory_utilization=0.9` can OOM; lower it
-(e.g. `0.7`) or reduce `max_num_seqs` to run those configurations.
+(e.g. `0.7`), reduce `max_num_seqs`, or pass `enable_prefill_diffusion_cudagraph=False` to retain
+decode CUDA Graphs without allocating the prefill diffusion graph.
 
 ## Acknowledgments
 

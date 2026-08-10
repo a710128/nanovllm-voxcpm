@@ -9,6 +9,7 @@ def test_config_post_init_asserts(tmp_path):
 
     cfg = Config(model=str(model_dir))
     assert cfg.model == str(model_dir)
+    assert cfg.enable_prefill_diffusion_cudagraph is True
 
     with pytest.raises(AssertionError):
         _ = Config(model=str(model_dir), kvcache_block_size=128)

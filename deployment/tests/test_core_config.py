@@ -121,6 +121,16 @@ def test_load_config_validates_serverpool(monkeypatch):
         load_config()
 
 
+def test_load_config_prefill_diffusion_cudagraph_toggle(monkeypatch):
+    from app.core.config import load_config
+
+    monkeypatch.delenv("NANOVLLM_SERVERPOOL_ENABLE_PREFILL_DIFFUSION_CUDAGRAPH", raising=False)
+    assert load_config().server_pool.enable_prefill_diffusion_cudagraph is True
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_ENABLE_PREFILL_DIFFUSION_CUDAGRAPH", "false")
+    assert load_config().server_pool.enable_prefill_diffusion_cudagraph is False
+
+
 def test_load_config_validates_inference_timesteps(monkeypatch):
     from app.core.config import load_config
 

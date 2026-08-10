@@ -26,6 +26,7 @@ class VoxCPM:
         enforce_eager: bool = False,
         devices: List[int] = [],
         lora_config: Any = None,
+        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ):
         if "~" in model:
@@ -90,6 +91,7 @@ class VoxCPM:
                 enforce_eager=enforce_eager,
                 devices=devices,
                 lora_config=lora_config,
+                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
                 **kwargs,
             )
         else:
@@ -103,5 +105,6 @@ class VoxCPM:
                 enforce_eager=enforce_eager,
                 devices=devices,
                 lora_config=lora_config,
+                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
                 **kwargs,
             )

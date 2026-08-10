@@ -64,6 +64,7 @@ class VoxCPMServerImpl:
         enforce_eager: bool = False,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
+        enable_prefill_diffusion_cudagraph: bool = True,
     ):
         model_config = VoxCPMConfig.model_validate_json(open(os.path.join(model_path, "config.json")).read())
 
@@ -78,6 +79,7 @@ class VoxCPMServerImpl:
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
             enforce_eager=enforce_eager,
+            enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
             model_config=model_config,
             devices=devices,
             lora_config=lora_config,
@@ -310,6 +312,7 @@ class AsyncVoxCPMServer:
         enforce_eager: bool = False,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
+        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ) -> None:
         if len(kwargs) > 0:
@@ -333,6 +336,7 @@ class AsyncVoxCPMServer:
                     enforce_eager,
                     devices,
                     lora_config,
+                    enable_prefill_diffusion_cudagraph,
                 ),
                 {},
             ),
@@ -545,6 +549,7 @@ class AsyncVoxCPMServerPool:
         enforce_eager: bool = False,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
+        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ):
         if len(kwargs) > 0:
@@ -561,6 +566,7 @@ class AsyncVoxCPMServerPool:
                 enforce_eager=enforce_eager,
                 devices=[device_idx],
                 lora_config=lora_config,
+                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
             )
             for device_idx in devices
         ]
@@ -721,6 +727,7 @@ class SyncVoxCPMServerPool:
         enforce_eager: bool = False,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
+        enable_prefill_diffusion_cudagraph: bool = True,
         **kwargs,
     ):
         async def init_async_server_pool():
@@ -734,6 +741,7 @@ class SyncVoxCPMServerPool:
                 enforce_eager=enforce_eager,
                 devices=devices,
                 lora_config=lora_config,
+                enable_prefill_diffusion_cudagraph=enable_prefill_diffusion_cudagraph,
                 **kwargs,
             )
 
