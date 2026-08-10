@@ -1,9 +1,28 @@
 import os
 from dataclasses import dataclass
+from enum import Enum
+
 from pydantic import BaseModel
 from typing import Generic, TypeVar, List, Any
 
 T = TypeVar("T", bound=BaseModel)
+
+
+class CUDAGraphMode(str, Enum):
+    """Select which inference CUDA Graph paths are enabled."""
+
+    FULL = "full"  # Capture both decode and prefill diffusion graphs.
+    DECODE_ONLY = "decode_only"  # Keep decode graphs; run prefill diffusion eagerly.
+    DISABLED = "disabled"  # Disable all CUDA Graphs and run the model eagerly.
+
+
+def resolve_cudagraph_mode(*, enforce_eager: bool, enforce_dit_prefill_eager: bool) -> CUDAGraphMode:
+    """Resolve user-facing eager flags, with full eager mode taking precedence."""
+    if enforce_eager:
+        return CUDAGraphMode.DISABLED
+    if enforce_dit_prefill_eager:
+        return CUDAGraphMode.DECODE_ONLY
+    return CUDAGraphMode.FULL
 
 
 @dataclass
@@ -14,13 +33,13 @@ class Config(Generic[T]):
     max_model_len: int = 4096
     gpu_memory_utilization: float = 0.9
     tensor_parallel_size: int = 1
-    enforce_eager: bool = False
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
 
     model_config: T | None = None
     devices: List[int] | None = None
     lora_config: Any = None  # Optional[LoRAConfig]
+    cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

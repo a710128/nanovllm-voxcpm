@@ -5,6 +5,7 @@ from nanovllm_voxcpm.models.voxcpm.engine import (
     Config,
 )
 from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
+from nanovllm_voxcpm.config import CUDAGraphMode
 import os
 import torch.multiprocessing as mp
 from queue import Empty
@@ -61,7 +62,7 @@ class VoxCPMServerImpl:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
     ):
@@ -77,7 +78,7 @@ class VoxCPMServerImpl:
             max_num_seqs=max_num_seqs,
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
-            enforce_eager=enforce_eager,
+            cudagraph_mode=cudagraph_mode,
             model_config=model_config,
             devices=devices,
             lora_config=lora_config,
@@ -307,7 +308,7 @@ class AsyncVoxCPMServer:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
         **kwargs,
@@ -330,7 +331,7 @@ class AsyncVoxCPMServer:
                     max_num_seqs,
                     max_model_len,
                     gpu_memory_utilization,
-                    enforce_eager,
+                    cudagraph_mode,
                     devices,
                     lora_config,
                 ),
@@ -542,7 +543,7 @@ class AsyncVoxCPMServerPool:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
         **kwargs,
@@ -558,7 +559,7 @@ class AsyncVoxCPMServerPool:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=[device_idx],
                 lora_config=lora_config,
             )
@@ -718,7 +719,7 @@ class SyncVoxCPMServerPool:
         max_num_seqs: int = 512,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
-        enforce_eager: bool = False,
+        cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL,
         devices: List[int] = [],
         lora_config: Optional[LoRAConfig] = None,
         **kwargs,
@@ -731,7 +732,7 @@ class SyncVoxCPMServerPool:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=devices,
                 lora_config=lora_config,
                 **kwargs,

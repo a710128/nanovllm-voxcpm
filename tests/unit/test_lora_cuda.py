@@ -285,6 +285,7 @@ def test_lora_linear_cuda_graph_replay():
 def test_runner_lora_cuda_graph_replay_supports_active_lora_count_changes():
     from types import SimpleNamespace
 
+    from nanovllm_voxcpm.config import CUDAGraphMode
     from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
     from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
     from nanovllm_voxcpm.utils.context import reset_all_contexts, set_context, set_lora_context
@@ -296,6 +297,7 @@ def test_runner_lora_cuda_graph_replay_supports_active_lora_count_changes():
     runner.max_loras = 2
     runner.block_size = 256
     runner.enforce_eager = False
+    runner.cudagraph_mode = CUDAGraphMode.DECODE_ONLY
     runner.model = _TinyDecodeModel(max_loras=2, max_lora_rank=1).cuda()
     runner._config = SimpleNamespace(
         max_num_seqs=8,
@@ -385,6 +387,7 @@ def test_runner_lora_cuda_graph_replay_supports_active_lora_count_changes():
 def test_lora_capture_cudagraph_keeps_python_host_flags():
     from types import SimpleNamespace
 
+    from nanovllm_voxcpm.config import CUDAGraphMode
     from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
     from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
 
@@ -394,6 +397,7 @@ def test_lora_capture_cudagraph_keeps_python_host_flags():
     runner.max_lora_rank = 2
     runner.max_loras = 1
     runner.block_size = 256
+    runner.cudagraph_mode = CUDAGraphMode.FULL
     runner.model = _TinyDecodeModel(max_loras=1, max_lora_rank=2).cuda()
     runner._config = SimpleNamespace(
         max_num_seqs=8,
@@ -421,6 +425,7 @@ def test_lora_capture_cudagraph_keeps_python_host_flags():
 def test_lora_capture_cudagraph_respects_max_num_seqs_below_eight():
     from types import SimpleNamespace
 
+    from nanovllm_voxcpm.config import CUDAGraphMode
     from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
     from nanovllm_voxcpm.lora import _VendoredTritonPunicaBackend, set_backend_for_testing
 
@@ -430,6 +435,7 @@ def test_lora_capture_cudagraph_respects_max_num_seqs_below_eight():
     runner.max_lora_rank = 2
     runner.max_loras = 1
     runner.block_size = 256
+    runner.cudagraph_mode = CUDAGraphMode.FULL
     runner.model = _TinyDecodeModel(max_loras=1, max_lora_rank=2).cuda()
     runner._config = SimpleNamespace(
         max_num_seqs=4,

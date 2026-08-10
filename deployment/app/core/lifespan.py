@@ -45,7 +45,7 @@ def build_lifespan(cfg: ServiceConfig):
             max_num_seqs=cfg.server_pool.max_num_seqs,
             max_model_len=cfg.server_pool.max_model_len,
             gpu_memory_utilization=cfg.server_pool.gpu_memory_utilization,
-            enforce_eager=cfg.server_pool.enforce_eager,
+            cudagraph_mode=cfg.server_pool.cudagraph_mode,
             devices=list(cfg.server_pool.devices),
             inference_timesteps=cfg.server_pool.inference_timesteps,
             lora_config=lora_config,

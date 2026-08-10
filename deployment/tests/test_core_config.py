@@ -121,6 +121,21 @@ def test_load_config_validates_serverpool(monkeypatch):
         load_config()
 
 
+def test_load_config_cudagraph_mode(monkeypatch):
+    from app.core.config import load_config
+    from nanovllm_voxcpm.config import CUDAGraphMode
+
+    monkeypatch.delenv("NANOVLLM_SERVERPOOL_ENFORCE_EAGER", raising=False)
+    monkeypatch.delenv("NANOVLLM_SERVERPOOL_ENFORCE_DIT_PREFILL_EAGER", raising=False)
+    assert load_config().server_pool.cudagraph_mode is CUDAGraphMode.FULL
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_ENFORCE_DIT_PREFILL_EAGER", "true")
+    assert load_config().server_pool.cudagraph_mode is CUDAGraphMode.DECODE_ONLY
+
+    monkeypatch.setenv("NANOVLLM_SERVERPOOL_ENFORCE_EAGER", "true")
+    assert load_config().server_pool.cudagraph_mode is CUDAGraphMode.DISABLED
+
+
 def test_load_config_validates_inference_timesteps(monkeypatch):
     from app.core.config import load_config
 

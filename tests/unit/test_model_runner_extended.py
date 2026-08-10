@@ -1122,6 +1122,23 @@ def test_exit_single_rank_non_eager_deletes_graphs(monkeypatch):
     assert not hasattr(runner, "prefill_diffusion_graph_vars")
 
 
+def test_prefill_diffusion_cudagraph_can_be_disabled_independently():
+    from nanovllm_voxcpm.config import CUDAGraphMode
+    from nanovllm_voxcpm.engine.model_runner import BaseModelRunner
+
+    runner = object.__new__(BaseModelRunner)
+    capture_calls = []
+    runner.capture_prefill_diffusion_cudagraph = lambda: capture_calls.append(True)
+
+    runner.cudagraph_mode = CUDAGraphMode.DECODE_ONLY
+    runner._maybe_capture_prefill_diffusion_cudagraph()
+    assert capture_calls == []
+
+    runner.cudagraph_mode = CUDAGraphMode.FULL
+    runner._maybe_capture_prefill_diffusion_cudagraph()
+    assert capture_calls == [True]
+
+
 def _make_domain_vars(max_rows: int, max_lora_buckets: int) -> dict:
     return {
         "token_to_slot": torch.full((max_rows,), -1, dtype=torch.int32),

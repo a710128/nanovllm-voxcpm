@@ -273,6 +273,7 @@ async def async_main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-model-len", type=int, default=4096)
     p.add_argument("--gpu-memory-utilization", type=float, default=0.9)
     p.add_argument("--enforce-eager", action="store_true")
+    p.add_argument("--enforce-dit-prefill-eager", action="store_true")
 
     p.add_argument("--target-text", default=DEFAULT_TEXT)
     p.add_argument("--target-text-file", default=None, help="Read target text from file (UTF-8)")
@@ -339,6 +340,7 @@ async def async_main(argv: list[str] | None = None) -> int:
             max_model_len=args.max_model_len,
             gpu_memory_utilization=args.gpu_memory_utilization,
             enforce_eager=args.enforce_eager,
+            enforce_dit_prefill_eager=args.enforce_dit_prefill_eager,
             devices=devices,
             lora_config=build_lora_config(
                 args.model,

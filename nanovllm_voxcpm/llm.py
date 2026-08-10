@@ -4,6 +4,8 @@ from huggingface_hub import snapshot_download
 from typing import Any, List
 import asyncio
 
+from nanovllm_voxcpm.config import resolve_cudagraph_mode
+
 try:
     # Import to ensure flash-attn is actually importable at runtime.
     # ruff: this is a dependency check, not a used symbol.
@@ -24,6 +26,7 @@ class VoxCPM:
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.9,
         enforce_eager: bool = False,
+        enforce_dit_prefill_eager: bool = False,
         devices: List[int] = [],
         lora_config: Any = None,
         **kwargs,
@@ -79,6 +82,10 @@ class VoxCPM:
         else:
             raise ValueError(f"Unsupported model architecture: {arch}")
 
+        cudagraph_mode = resolve_cudagraph_mode(
+            enforce_eager=enforce_eager,
+            enforce_dit_prefill_eager=enforce_dit_prefill_eager,
+        )
         if is_async_mode:
             return async_server_pool_cls(
                 model_path=model_path,
@@ -87,7 +94,7 @@ class VoxCPM:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=devices,
                 lora_config=lora_config,
                 **kwargs,
@@ -100,7 +107,7 @@ class VoxCPM:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 gpu_memory_utilization=gpu_memory_utilization,
-                enforce_eager=enforce_eager,
+                cudagraph_mode=cudagraph_mode,
                 devices=devices,
                 lora_config=lora_config,
                 **kwargs,

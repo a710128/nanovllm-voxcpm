@@ -81,7 +81,7 @@ import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
 
-from nanovllm_voxcpm.config import Config
+from nanovllm_voxcpm.config import CUDAGraphMode, Config
 from nanovllm_voxcpm.engine.lora_manager import (
     LoRAModelPayload,
     LoRARuntime,
@@ -232,11 +232,13 @@ class BaseModelRunner:
     ):
         self._config = config
         self.block_size = config.kvcache_block_size
-        self.enforce_eager = config.enforce_eager
+        self.cudagraph_mode = config.cudagraph_mode
+        self.enforce_eager = self.cudagraph_mode is CUDAGraphMode.DISABLED
         if sys.platform == "win32":
             import torch._dynamo as dynamo_mod
 
             dynamo_mod.config.disable = True
+            self.cudagraph_mode = CUDAGraphMode.DISABLED
             self.enforce_eager = True
         self.world_size = config.tensor_parallel_size
         self.rank = rank
@@ -1090,7 +1092,11 @@ class BaseModelRunner:
             lora_domains=lora_domains,
             outputs=outputs,
         )
-        self.capture_prefill_diffusion_cudagraph()
+        self._maybe_capture_prefill_diffusion_cudagraph()
+
+    def _maybe_capture_prefill_diffusion_cudagraph(self) -> None:
+        if self.cudagraph_mode is CUDAGraphMode.FULL:
+            self.capture_prefill_diffusion_cudagraph()
 
     @torch.inference_mode()
     def capture_prefill_diffusion_cudagraph(self) -> None:

@@ -53,6 +53,8 @@ Environment variables:
   - `NANOVLLM_SERVERPOOL_MAX_MODEL_LEN` (int, default `4096`)
   - `NANOVLLM_SERVERPOOL_GPU_MEMORY_UTILIZATION` (float, default `0.95`, allowed `(0, 1]`)
   - `NANOVLLM_SERVERPOOL_ENFORCE_EAGER` (bool, default `false`; accepts `1/0,true/false,yes/no,on/off`)
+  - `NANOVLLM_SERVERPOOL_ENFORCE_DIT_PREFILL_EAGER` (bool, default `false`) — enable to save
+    the prefill diffusion graph's VRAM while retaining decode CUDA Graphs.
   - `NANOVLLM_SERVERPOOL_DEVICES` (comma-separated ints, default `0`; e.g. `0,1`)
   - `NANOVLLM_SERVERPOOL_INFERENCE_TIMESTEPS` (int, default `10`, allowed `> 0`) — number of CFM flow-matching ODE steps for the audio decoder. Lower is faster but coarser; higher is slower but finer.
   - `NANOVLLM_SERVERPOOL_NUM_KVCACHE_BLOCKS` (advanced int override, optional; read by the core runtime to
