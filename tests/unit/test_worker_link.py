@@ -49,7 +49,7 @@ async def _bind_fails_in_flight_waiters() -> None:
     assert _pending_callbacks(link) == 3
     assert not any(fut.done() for fut in waiters)
 
-    link._fail(_FakeProcess(exitcode=-9))
+    link._fail(-9)
 
     for fut in waiters:
         with pytest.raises(WorkerDiedError, match="exitcode=-9"):
@@ -63,7 +63,7 @@ def test_bind_fails_in_flight_waiters():
 async def _bind_rejects_waiters_created_after_death() -> None:
     loop = asyncio.get_running_loop()
     link = WorkerLink(loop)
-    link._fail(_FakeProcess(exitcode=1))
+    link._fail(1)
 
     # add_done_callback fires immediately on an already-resolved future, so no
     # extra "is the worker dead" check is needed in submit().
@@ -100,7 +100,7 @@ async def _bind_leaves_already_settled_waiters_alone() -> None:
     fut.set_result("done before the crash")
     await asyncio.sleep(0)
 
-    link._fail(_FakeProcess(exitcode=-9))
+    link._fail(-9)
     await asyncio.sleep(0)
 
     assert await fut == "done before the crash"
@@ -120,7 +120,7 @@ async def _on_death_notifies_and_can_be_released() -> None:
     released_handle = link.on_death(lambda _exc: released.append(object()))
     link.release(released_handle)
 
-    link._fail(_FakeProcess(exitcode=-9))
+    link._fail(-9)
     await asyncio.sleep(0)
 
     assert isinstance(await stream.get(), StreamFailed)
@@ -138,7 +138,7 @@ async def _mark_stopping_suppresses_failure() -> None:
     fut = link.bind(loop.create_future())
 
     link.mark_stopping()
-    link._fail(_FakeProcess(exitcode=0))
+    link._fail(0)
     await asyncio.sleep(0)
 
     assert not link.dead
@@ -155,7 +155,7 @@ async def _failure_reports_exitcode() -> None:
     link = WorkerLink(loop)
 
     assert not link.dead
-    link._fail(_FakeProcess(exitcode=-9))
+    link._fail(-9)
 
     assert link.dead
     assert isinstance(link.failure(), WorkerDiedError)
@@ -164,13 +164,6 @@ async def _failure_reports_exitcode() -> None:
 
 def test_failure_reports_exitcode():
     asyncio.run(_failure_reports_exitcode())
-
-
-class _FakeProcess:
-    """Stand-in for ``multiprocessing.Process`` in propagation-only tests."""
-
-    def __init__(self, exitcode: int) -> None:
-        self.exitcode = exitcode
 
 
 # ---------------------------------------------------------------------------
