@@ -17,6 +17,8 @@ import io
 import numpy as np
 import pytest
 
+from nanovllm_voxcpm.models.worker_link import WorkerLink
+
 # ---------------------------------------------------------------------------
 # Shared fake server helpers
 # ---------------------------------------------------------------------------
@@ -652,6 +654,9 @@ async def _async_server_generate_completes_and_cleans_stream_state():
 
     server = object.__new__(AsyncVoxCPMServer)
     server.stream_table = {}
+    # generate() reports worker death through the link; an unwatched
+    # link never fires, so these tests exercise the healthy path only.
+    server._link = WorkerLink(asyncio.get_running_loop())
     commands = []
 
     async def submit(command, *args):
@@ -680,6 +685,9 @@ async def _async_server_generate_cancels_when_consumer_closes_early():
 
     server = object.__new__(AsyncVoxCPMServer)
     server.stream_table = {}
+    # generate() reports worker death through the link; an unwatched
+    # link never fires, so these tests exercise the healthy path only.
+    server._link = WorkerLink(asyncio.get_running_loop())
     commands = []
 
     async def submit(command, *args):

@@ -5,6 +5,12 @@ from nanovllm_voxcpm.models.voxcpm.engine import (
     Config,
 )
 from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
+from nanovllm_voxcpm.models.worker_link import (
+    STREAM_FAILED,
+    StreamFailed,
+    WorkerLink,
+    ignore_unretrieved,
+)
 import os
 import torch.multiprocessing as mp
 from queue import Empty
@@ -340,14 +346,20 @@ class AsyncVoxCPMServer:
         )
         self.process.start()
 
-        # Child process sends an explicit init_ok/init_error message.
-        # Track it as a Future so wait_for_ready can block without timeouts,
-        # but still fail fast if init throws (e.g. CUDA OOM).
         loop = asyncio.get_running_loop()
-        self._init_fut: asyncio.Future[None] = loop.create_future()
+        # Watches the worker process; every future bound to this link fails as
+        # soon as the process terminates, instead of hanging forever.
+        self._link = WorkerLink(loop)
+        self._link.watch(self.process, name="voxcpm-watchdog")
+
+        # Child process sends an explicit init_ok/init_error message. Track it
+        # as a Future so wait_for_ready can block without timeouts, but still
+        # fail fast if init throws (e.g. CUDA OOM) or the process never starts.
+        self._init_fut: asyncio.Future[None] = self._link.bind(loop.create_future())
+        ignore_unretrieved(self._init_fut)
 
         self.op_table: dict[str, asyncio.Future[Any]] = {}
-        self.stream_table: dict[str, asyncio.Queue[Waveform | None]] = {}
+        self.stream_table: dict[str, asyncio.Queue[Waveform | None | StreamFailed]] = {}
         self._queue_out_async: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._queue_out_stop = threading.Event()
         self._queue_out_thread = threading.Thread(
@@ -410,12 +422,18 @@ class AsyncVoxCPMServer:
         op_id = str(uuid.uuid4())
 
         loop = asyncio.get_running_loop()
-        fut: asyncio.Future[Any] = loop.create_future()
+        # Binding aborts this request if the worker dies while it is in flight,
+        # and rejects it outright if the worker is already gone.
+        fut: asyncio.Future[Any] = self._link.bind(loop.create_future())
 
         self.op_table[op_id] = fut
 
         self.queue_in.put_nowait({"id": op_id, "type": cmd, "args": args, "kwargs": kwargs})
-        return await fut
+        try:
+            return await fut
+        finally:
+            # recv_queue pops on reply; this also covers failure/cancellation.
+            self.op_table.pop(op_id, None)
 
     async def health(self) -> HealthResponse:
         return await self.submit("health")
@@ -424,21 +442,19 @@ class AsyncVoxCPMServer:
         return await self.submit("get_model_info")
 
     async def wait_for_ready(self) -> None:
-        # Never time out here; instead fail fast if the child process exits.
-        while not self._init_fut.done():
-            if self.process.exitcode is not None:
-                if not self._init_fut.done():
-                    self._init_fut.set_exception(
-                        RuntimeError(f"server process exited early: exitcode={self.process.exitcode}")
-                    )
-                break
-            await asyncio.sleep(0.05)
+        # Never time out here. _init_fut is bound to the worker link, so a
+        # process that dies before sending init_ok/init_error resolves it with
+        # WorkerDiedError rather than leaving us blocked.
         await self._init_fut
 
     async def encode_latents(self, wav: bytes, wav_format: str) -> bytes:
         return await self.submit("encode_latents", wav, wav_format)
 
     async def stop(self) -> None:
+        # Announce the shutdown before touching the worker, so the watchdog
+        # does not report the expected exit as a crash.
+        self._link.mark_stopping()
+
         # Best-effort graceful shutdown. If init failed or the child process
         # already exited, don't block indefinitely.
         graceful_stop = False
@@ -472,6 +488,9 @@ class AsyncVoxCPMServer:
                 kill()
                 await asyncio.to_thread(self.process.join, 2.0)
 
+        # The watchdog unblocks once the process is gone.
+        self._link.join(timeout=1.0)
+
         # The parent process created these multiprocessing Queues. If we don't
         # close/join them, Python may warn at interpreter shutdown about leaked
         # semaphore objects via multiprocessing.resource_tracker.
@@ -504,7 +523,12 @@ class AsyncVoxCPMServer:
         seed: int | None = None,
     ) -> AsyncGenerator[Waveform, None]:
         seq_id = gen_uuid()
-        self.stream_table[seq_id] = asyncio.Queue()
+        stream: asyncio.Queue[Waveform | None | StreamFailed] = asyncio.Queue()
+        self.stream_table[seq_id] = stream
+        # submit() only protects the add_request round trip; once the request
+        # is accepted the consumer parks on the stream queue, so the worker
+        # dying mid-generation needs its own wakeup.
+        death_handle = self._link.on_death(lambda _exc: stream.put_nowait(STREAM_FAILED))
 
         is_normal_exit = False
         try:
@@ -522,15 +546,22 @@ class AsyncVoxCPMServer:
             )
 
             while True:
-                data = await self.stream_table[seq_id].get()
+                data = await stream.get()
+                if isinstance(data, StreamFailed):
+                    raise self._link.failure()
                 if data is None:
                     is_normal_exit = True
                     break
                 yield data
         finally:
-            if not is_normal_exit:
-                await self.submit("cancel", seq_id)
-            del self.stream_table[seq_id]
+            self._link.release(death_handle)
+            # Reclaim the slot unconditionally: a failing cancel must not leak.
+            self.stream_table.pop(seq_id, None)
+            if not is_normal_exit and not self._link.dead:
+                # Best effort. Never mask the exception that got us here, and
+                # never swallow CancelledError (it is not an Exception).
+                with contextlib.suppress(Exception):
+                    await self.submit("cancel", seq_id)
 
 
 class AsyncVoxCPMServerPool:
