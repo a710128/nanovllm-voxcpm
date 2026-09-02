@@ -20,7 +20,7 @@ from nanovllm_voxcpm.config import Config
 from nanovllm_voxcpm.models.voxcpm2.config import LoRAConfig, VoxCPM2Config
 from nanovllm_voxcpm.models.voxcpm2.engine import VoxCPM2Engine
 from nanovllm_voxcpm.models.voxcpm2.runner import VoxCPM2Runner
-from nanovllm_voxcpm.models.worker_link import (
+from nanovllm_voxcpm.utils.worker_link import (
     STREAM_FAILED,
     StreamFailed,
     WorkerLink,

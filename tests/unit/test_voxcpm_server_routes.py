@@ -17,7 +17,7 @@ import io
 import numpy as np
 import pytest
 
-from nanovllm_voxcpm.models.worker_link import WorkerLink
+from nanovllm_voxcpm.utils.worker_link import WorkerLink
 
 # ---------------------------------------------------------------------------
 # Shared fake server helpers

@@ -105,7 +105,7 @@ async def _shutdown(server: Any) -> None:
 
 
 def _worker_died_error() -> type[BaseException]:
-    from nanovllm_voxcpm.models.worker_link import WorkerDiedError
+    from nanovllm_voxcpm.utils.worker_link import WorkerDiedError
 
     return WorkerDiedError
 

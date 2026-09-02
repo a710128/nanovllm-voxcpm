@@ -5,7 +5,7 @@ from nanovllm_voxcpm.models.voxcpm.engine import (
     Config,
 )
 from nanovllm_voxcpm.models.voxcpm.config import LoRAConfig
-from nanovllm_voxcpm.models.worker_link import (
+from nanovllm_voxcpm.utils.worker_link import (
     STREAM_FAILED,
     StreamFailed,
     WorkerLink,

@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`nanovllm_voxcpm.models.worker_link`.
+"""Unit tests for :mod:`nanovllm_voxcpm.utils.worker_link`.
 
 Covers the two halves of :class:`WorkerLink` separately:
 
@@ -18,7 +18,7 @@ import time
 import multiprocessing as mp
 import pytest
 
-from nanovllm_voxcpm.models.worker_link import (
+from nanovllm_voxcpm.utils.worker_link import (
     STREAM_FAILED,
     StreamFailed,
     WorkerDiedError,
