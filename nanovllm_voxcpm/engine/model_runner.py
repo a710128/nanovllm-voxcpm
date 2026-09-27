@@ -92,6 +92,7 @@ from nanovllm_voxcpm.engine.lora_manager import (
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.layers.lora import iter_lora_modules
 from nanovllm_voxcpm.lora import is_available as is_lora_available
+from nanovllm_voxcpm.utils.batch_buckets import make_batch_size_buckets
 from nanovllm_voxcpm.utils.context import (
     DIT_LORA_DOMAIN,
     LM_LORA_DOMAIN,
@@ -1008,8 +1009,7 @@ class BaseModelRunner:
         }
         outputs = self.make_dummy_outputs(max_bs)
 
-        graph_bs_candidates = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16)) + [max_bs]
-        self.graph_bs = sorted({bs for bs in graph_bs_candidates if 1 <= bs <= max_bs})
+        self.graph_bs = list(make_batch_size_buckets(max_bs))
         self.graphs = {"base": {}, "lora": {}}
         self.graph_pool = None
         capture_lora_graphs = bool(config.lora_config is not None and is_lora_available())

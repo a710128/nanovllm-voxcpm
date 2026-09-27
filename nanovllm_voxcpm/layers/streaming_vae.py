@@ -3,6 +3,8 @@ from collections.abc import Hashable, Sequence
 import torch
 from torch import nn
 
+from nanovllm_voxcpm.utils.batch_buckets import make_batch_size_buckets
+
 
 class BatchedStreamingVAEDecoder:
     """Stateful causal VAE decoder for dynamically batched request streams."""
@@ -14,28 +16,14 @@ class BatchedStreamingVAEDecoder:
         causal_transpose_conv_type: type[nn.ConvTranspose1d],
         max_batch_size: int | None = None,
     ):
-        if max_batch_size is not None and max_batch_size < 1:
-            raise ValueError("max_batch_size must be positive")
         self._vae = vae
         self._causal_conv_type = causal_conv_type
         self._causal_transpose_conv_type = causal_transpose_conv_type
-        self._batch_size_buckets = self._make_batch_size_buckets(max_batch_size)
+        self._batch_size_buckets = make_batch_size_buckets(max_batch_size)
         self._states: dict[int, dict[Hashable, torch.Tensor]] = {}
         self._stream_ids: Sequence[Hashable] | None = None
         self._initialized_streams: set[Hashable] = set()
         self._install()
-
-    @staticmethod
-    def _make_batch_size_buckets(max_batch_size: int | None) -> tuple[int, ...]:
-        if max_batch_size is None:
-            return ()
-        buckets = []
-        batch_size = 1
-        while batch_size < max_batch_size:
-            buckets.append(batch_size)
-            batch_size *= 2
-        buckets.append(max_batch_size)
-        return tuple(buckets)
 
     @torch.inference_mode()
     def decode_chunks(
