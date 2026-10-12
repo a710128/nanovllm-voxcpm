@@ -5,6 +5,7 @@ from typing import Optional
 from nanovllm_voxcpm.layers.activation import SiluAndMul
 from nanovllm_voxcpm.layers.attention import Attention
 from nanovllm_voxcpm.layers.layernorm import RMSNorm
+from nanovllm_voxcpm.layers.longrope import apply_longrope
 from nanovllm_voxcpm.layers.linear import (
     MergedColumnParallelLinear,
     QKVParallelLinear,
@@ -101,6 +102,8 @@ class MiniCPMLongRoPE(nn.Module):
         query: torch.Tensor,
         key: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if query.is_cuda and not torch.is_grad_enabled():
+            return apply_longrope(positions, query, key, self.cos_cached, self.sin_cached, self.dim)
         # position: [t]
         # query: [t, h, d]
         # key: [t, h, d]
@@ -848,6 +851,7 @@ class VoxCPMModel(nn.Module):
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
         z_noise: torch.Tensor | None = None,
+        text_only_prefill: bool = False,
     ):
         """
         text_tokens: [T]
@@ -856,19 +860,24 @@ class VoxCPMModel(nn.Module):
         temperature: [B]
         cfg_value: [B]
         """
-        feat_embeds = self.feat_encoder(feat)
-        feat_embeds = self.enc_to_lm_proj(feat_embeds)
-        feat_embeds = torch.masked_fill(feat_embeds, feat_mask.unsqueeze(-1).logical_not(), 0)
-
         text_embeds = self.base_lm.embed_tokens(text_tokens)
-        combined_embeds = combine_feature_and_text_embeddings(feat_embeds, text_embeds, feat_mask)
+        if text_only_prefill:
+            # The runner proves the entire mask is false using CPU metadata.
+            # Audio encoding and quantization would both be discarded.
+            feat_embeds = torch.zeros_like(text_embeds)
+            combined_embeds = text_embeds
+        else:
+            feat_embeds = self.enc_to_lm_proj(self.feat_encoder(feat))
+            feat_embeds = torch.masked_fill(feat_embeds, feat_mask.unsqueeze(-1).logical_not(), 0)
+            combined_embeds = combine_feature_and_text_embeddings(feat_embeds, text_embeds, feat_mask)
 
         enc_outputs = self.base_lm(combined_embeds, positions)
-        enc_outputs = torch.where(
-            feat_mask.unsqueeze(-1),
-            self.fsq_layer(enc_outputs),
-            enc_outputs,
-        )
+        if not text_only_prefill:
+            enc_outputs = torch.where(
+                feat_mask.unsqueeze(-1),
+                self.fsq_layer(enc_outputs),
+                enc_outputs,
+            )
 
         context = get_context()
         if context.is_prefill:
@@ -943,6 +952,7 @@ class VoxCPMModel(nn.Module):
         temperature: torch.Tensor,
         cfg_value: torch.Tensor,
         z_noise: torch.Tensor | None = None,
+        text_only_prefill: bool = False,
     ):
         diffusion_inputs, outputs = self.forward_backbone(
             positions=positions,
@@ -952,6 +962,7 @@ class VoxCPMModel(nn.Module):
             temperature=temperature,
             cfg_value=cfg_value,
             z_noise=z_noise,
+            text_only_prefill=text_only_prefill,
         )
         outputs["latents"] = self.forward_diffusion(**diffusion_inputs)
         return outputs

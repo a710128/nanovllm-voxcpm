@@ -125,6 +125,9 @@ class VoxCPMRunner(BaseModelRunner):
 
         text_tokens_np, feats_np, feat_masks_np, temperatures, cfg_values = assemble_batch_inputs(seqs)
 
+        if is_prefill:
+            # Decide from host metadata; inspecting the CUDA mask would sync.
+            inputs["text_only_prefill"] = not bool(feat_masks_np.any())
         inputs["text_tokens"] = torch.from_numpy(text_tokens_np).cuda(non_blocking=True)
         inputs["feat"] = torch.from_numpy(feats_np).cuda(non_blocking=True).to(self.dtype)
         inputs["feat_mask"] = torch.from_numpy(feat_masks_np).cuda(non_blocking=True)

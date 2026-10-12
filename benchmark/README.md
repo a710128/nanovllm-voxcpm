@@ -2,6 +2,34 @@
 
 End-to-end inference benchmarking for VoxCPM.
 
+## First Audio Versus the Official Implementation
+
+Run each backend in a separate process with the same local model weights:
+
+```bash
+uv run python benchmark/bench_streaming_latency.py --backend nano --model ~/VoxCPM2 \
+  --target-text-file benchmark/target_text_100w_en.txt --warmup 5 --iters 20 \
+  --max-generate-length 32 --request-gap-ms 50 --json-out nano-latency.json
+
+# Use a Python environment containing the official voxcpm package, or pass
+# --native-source /path/to/directory/containing/voxcpm to select its source.
+uv run python benchmark/bench_streaming_latency.py --backend native --model ~/VoxCPM2 \
+  --target-text-file benchmark/target_text_100w_en.txt --warmup 5 --iters 20 \
+  --max-generate-length 32 --request-gap-ms 50 --json-out native-latency.json
+```
+
+TTFB ends when the first nonempty CPU waveform arrives. Nano includes worker IPC;
+the official implementation is called in-process. Neither measurement includes HTTP.
+The request gap is outside the timer. Keep the default queue-coalescing policy
+unless comparing that policy explicitly. Each JSON contains warmup records,
+per-chunk arrivals and sample counts, initialization time, and environment details.
+
+The official backend disables normalization, denoising, and retry. Identical seeds
+do not imply identical samples across implementations. Compare the first chunk's
+audio duration as well as latency, and do not mix cold-request times with warmed
+medians. The 32-chunk cap is useful for latency experiments; use
+`--max-generate-length 2000` to compare complete generation.
+
 ## Run
 
 ```bash

@@ -271,15 +271,19 @@ class BaseModelRunner:
                 )
         torch.cuda.set_device(device_idx)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(self.dtype)
-        torch.set_default_device("cuda")
-        self.init_model(self._config.model_config, self._config.model)
-        self.warmup_model()
-        self.allocate_kv_cache()
-        if not self.enforce_eager:
-            self.capture_cudagraph()
-        torch.set_default_device("cpu")
-        torch.set_default_dtype(default_dtype)
+        try:
+            torch.set_default_dtype(self.dtype)
+            # Setting the default back to "cpu" leaves a TorchFunctionMode on
+            # every eager Torch call. Scope it to initialization instead, and
+            # preserve any device context the caller already owns.
+            with torch.device("cuda"):
+                self.init_model(self._config.model_config, self._config.model)
+                self.warmup_model()
+                self.allocate_kv_cache()
+                if not self.enforce_eager:
+                    self.capture_cudagraph()
+        finally:
+            torch.set_default_dtype(default_dtype)
 
         if self.world_size > 1:
             if rank == 0:
