@@ -5,6 +5,16 @@ import torch
 from torch import nn
 
 from nanovllm_voxcpm.layers.streaming_vae import BatchedStreamingVAEDecoder
+from nanovllm_voxcpm.utils.batch_buckets import make_batch_size_buckets
+
+
+def test_batch_size_buckets_use_shared_hybrid_policy():
+    assert make_batch_size_buckets(None) == ()
+    assert make_batch_size_buckets(1) == (1,)
+    assert make_batch_size_buckets(100) == (1, 2, 4, 8, 16, 32, 64, 96, 100)
+    assert make_batch_size_buckets(512) == (1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256, 384, 512)
+    with pytest.raises(ValueError, match="positive"):
+        make_batch_size_buckets(0)
 
 
 @pytest.mark.parametrize(
