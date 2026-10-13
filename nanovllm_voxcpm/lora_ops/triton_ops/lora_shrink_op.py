@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+
 import torch
 import triton
 import triton.language as tl
@@ -11,6 +14,10 @@ _SMALL_M_THRESHOLD = 32
 _SMALL_M_MAX_ACTIVE_LORAS = 32
 _SMALL_M_MAX_BLOCK_RANK = 8
 _SMALL_M_MAX_BLOCK_K = 1024
+# `tl.dot` used to require every operand dimension >= 16 on the NVIDIA backend
+# (`min_dot_size == (16, 16, 16)` for fp16/bf16/fp32). Triton 3.5 relaxed this
+# to `(1, 1, 16)`, which is what the small-M kernel's one-row dot relies on.
+_SMALL_M_DOT_MIN_TRITON_VERSION = (3, 5)
 
 
 @triton.jit
@@ -173,8 +180,39 @@ def _lora_shrink_small_m_kernel(
         tl.atomic_add(out_ptr, accumulator, mask=mask_r, sem="relaxed")
 
 
+@lru_cache
+def _triton_supports_small_m_dot() -> bool:
+    """Whether the installed Triton accepts ``tl.dot`` with M/N dims < 16.
+
+    The small-M shrink kernel builds a ``[1, BLOCK_K] x [BLOCK_K, BLOCK_R]``
+    dot. On Triton < 3.5 that dot fails to compile with
+    ``AssertionError: Input shapes should have M >= 16, N >= 16 and K >= 16``,
+    which used to crash every decode step of single-sequence LoRA inference.
+    On such versions the small-M fast path must be skipped in favor of the
+    regular shrink kernel (whose dot operands are always >= 16).
+
+    Returns:
+        True if the installed Triton version is known to allow the one-row
+        dot; False when unsupported or when the version cannot be determined
+        (conservative fallback, never raises).
+    """
+    try:
+        match = re.match(r"(\d+)\.(\d+)", triton.__version__)
+        if match is None:
+            return False
+        return (int(match.group(1)), int(match.group(2))) >= _SMALL_M_DOT_MIN_TRITON_VERSION
+    except (AttributeError, TypeError):
+        return False
+
+
 def _use_small_m_shrink_path(M: int, N: int, num_active_loras: int, num_slices: int) -> bool:
-    return M < _SMALL_M_THRESHOLD and N > 0 and 0 < num_active_loras <= _SMALL_M_MAX_ACTIVE_LORAS and num_slices > 0
+    return (
+        M < _SMALL_M_THRESHOLD
+        and _triton_supports_small_m_dot()
+        and N > 0
+        and 0 < num_active_loras <= _SMALL_M_MAX_ACTIVE_LORAS
+        and num_slices > 0
+    )
 
 
 def _select_small_m_kernel_config(K: int, N: int) -> tuple[int, int, int]:

@@ -1,4 +1,5 @@
-"""CPU-side tests for lora_kernel_metadata.py and utils.py.
+"""CPU-side tests for lora_kernel_metadata.py, utils.py and the pure-Python
+routing logic of lora_shrink_op.py.
 
 These files contain pure Python metadata/parameter assembly logic that is
 CPU-testable. Actual Triton JIT kernels (kernel_utils.py) are GPU-only and
@@ -386,3 +387,126 @@ class TestGetLoraOpConfigs:
         from nanovllm_voxcpm.lora_ops.triton_ops.utils import supports_pdl
 
         assert supports_pdl() is False
+
+
+# ---------------------------------------------------------------------------
+# lora_shrink_op.py – small-M fast path routing (issue #74 hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestTritonSmallMDotSupport:
+    """Version gating for the small-M LoRA shrink fast path.
+
+    Triton < 3.5 rejects `tl.dot` operands with M/N dims < 16, so the small-M
+    kernel's one-row dot crashes at compile time (issue #74). The routing
+    helper must detect this and fall back to the regular shrink kernel.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_version_cache(self):
+        from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+
+        lora_shrink_op._triton_supports_small_m_dot.cache_clear()
+        yield
+        lora_shrink_op._triton_supports_small_m_dot.cache_clear()
+
+    def _probe(self, monkeypatch, version):
+        import triton
+
+        from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+
+        # raising=False: CI environments without a real triton install get a
+        # shim stub module (see tests/_shims.py) that has no __version__.
+        monkeypatch.setattr(triton, "__version__", version, raising=False)
+        return lora_shrink_op._triton_supports_small_m_dot()
+
+    @pytest.mark.parametrize(
+        "version",
+        ["3.0.0", "3.1.0", "3.2.0", "3.3.0", "3.4.0", "3.4.0.post21"],
+    )
+    def test_triton_before_35_rejects_small_m_dot(self, monkeypatch, version):
+        """Triton < 3.5 (incl. the triton-windows 3.4.0.postX fork) must
+        disable the small-M path: its min_dot_size is (16, 16, 16)."""
+        assert self._probe(monkeypatch, version) is False
+
+    @pytest.mark.parametrize("version", ["3.5.0", "3.6.0", "3.10.0", "4.0.0"])
+    def test_triton_at_least_35_allows_small_m_dot(self, monkeypatch, version):
+        """Triton >= 3.5 relaxed min_dot_size to (1, 1, 16); keep the fast
+        path. 3.10.0 also guards against string/tuple comparison bugs."""
+        assert self._probe(monkeypatch, version) is True
+
+    def test_unparseable_version_disables_small_m_dot(self, monkeypatch):
+        """A version we cannot parse must conservatively disable the path."""
+        assert self._probe(monkeypatch, "unknown") is False
+        assert self._probe(monkeypatch, "") is False
+
+    def test_missing_version_attribute_disables_small_m_dot(self, monkeypatch):
+        """A Triton module without __version__ must not raise."""
+        import triton
+
+        from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+
+        if hasattr(triton, "__version__"):
+            monkeypatch.delattr(triton, "__version__")
+        # Whether the attribute is genuinely absent (CI triton stub) or just
+        # removed here, the probe must conservatively return False.
+        assert lora_shrink_op._triton_supports_small_m_dot() is False
+
+    def test_version_probe_is_cached(self, monkeypatch):
+        """The lru_cache keeps the probe result stable across calls."""
+        import triton
+
+        from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+
+        monkeypatch.setattr(triton, "__version__", "3.6.0", raising=False)
+        first = lora_shrink_op._triton_supports_small_m_dot()
+        monkeypatch.setattr(triton, "__version__", "3.4.0", raising=False)
+        # Cached: the mutated version must not change the answer.
+        assert lora_shrink_op._triton_supports_small_m_dot() is first is True
+
+
+class TestUseSmallMShrinkPath:
+    """_use_small_m_shrink_path gating under old/new Triton (issue #74)."""
+
+    @pytest.fixture
+    def route(self, monkeypatch):
+        from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+
+        def _route(small_m_supported: bool, M: int, N: int = 8, num_active_loras: int = 1, num_slices: int = 1) -> bool:
+            monkeypatch.setattr(lora_shrink_op, "_triton_supports_small_m_dot", lambda: small_m_supported)
+            return lora_shrink_op._use_small_m_shrink_path(
+                M=M, N=N, num_active_loras=num_active_loras, num_slices=num_slices
+            )
+
+        return _route
+
+    def test_single_token_disabled_on_old_triton(self, route):
+        """The exact issue #74 scenario: M=1 decode on Triton 3.4 must route
+        to the regular shrink kernel instead of crashing the small-M one."""
+        assert route(small_m_supported=False, M=1) is False
+
+    def test_single_token_enabled_on_new_triton(self, route):
+        """On Triton >= 3.5 the single-token fast path stays enabled."""
+        assert route(small_m_supported=True, M=1) is True
+
+    def test_threshold_boundary_untouched_by_version_gate(self, route):
+        """M >= _SMALL_M_THRESHOLD never takes the small-M path, regardless
+        of the Triton version."""
+        from nanovllm_voxcpm.lora_ops.triton_ops.lora_shrink_op import _SMALL_M_THRESHOLD
+
+        assert route(small_m_supported=True, M=_SMALL_M_THRESHOLD - 1) is True
+        assert route(small_m_supported=True, M=_SMALL_M_THRESHOLD) is False
+        assert route(small_m_supported=False, M=_SMALL_M_THRESHOLD) is False
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"N": 0},
+            {"num_active_loras": 0},
+            {"num_active_loras": 33},
+            {"num_slices": 0},
+        ],
+    )
+    def test_other_guards_still_apply(self, route, kwargs):
+        """The pre-existing guards must keep working with the version gate."""
+        assert route(small_m_supported=True, M=1, **kwargs) is False
