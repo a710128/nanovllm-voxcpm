@@ -37,6 +37,74 @@ def test_block_manager_allocate_cache_reuse_and_deallocate():
     assert bm.used_block_ids == set()
 
 
+def _assert_hash_consistency(bm):
+    """Invariant: a hash entry lives exactly as long as the content it maps to.
+
+    - Every entry points to the block currently holding that content.
+    - Every content-bearing block has its entry registered.
+    - The dict is bounded by the physical block count.
+    """
+    assert len(bm.hash_to_block_id) <= len(bm.blocks)
+    for h, block_id in bm.hash_to_block_id.items():
+        assert bm.blocks[block_id].hash == h
+    for block in bm.blocks:
+        if block.hash != -1:
+            assert bm.hash_to_block_id.get(block.hash) == block.block_id
+
+
+def test_block_manager_reuse_after_deallocate():
+    from nanovllm_voxcpm.engine.block_manager import BlockManager
+
+    bm = BlockManager(num_blocks=8, block_size=4)
+    seq1 = _make_seq("s1", [1, 2, 3, 4, 5, 6, 7, 8], 4)
+    bm.allocate(seq1)
+    block_table_before = list(seq1.block_table)
+    bm.deallocate(seq1)
+
+    # A freed block keeps its content until recycled, so a later request with
+    # the same prefix must resurrect it instead of recomputing the prefill.
+    seq2 = _make_seq("s2", [1, 2, 3, 4, 5, 6, 7, 8], 4)
+    bm.allocate(seq2)
+    assert seq2.num_cached_tokens == 8
+    assert seq2.block_table == block_table_before
+    for block_id in seq2.block_table:
+        assert block_id in bm.used_block_ids
+        assert bm.blocks[block_id].ref_count == 1
+
+
+def test_block_manager_recycle_evicts_stale_hash_entries():
+    from nanovllm_voxcpm.engine.block_manager import BlockManager
+
+    bm = BlockManager(num_blocks=4, block_size=4)
+    seq1 = _make_seq("s1", [1, 2, 3, 4, 5, 6, 7, 8], 4)
+    bm.allocate(seq1)
+    stale_hashes = [bm.blocks[b].hash for b in seq1.block_table]
+    bm.deallocate(seq1)
+
+    # Force every free block through recycling with different content.
+    for i in range(10):
+        seq = _make_seq(f"s{i}", [100 * (i + 1) + j for j in range(4)], 4)
+        bm.allocate(seq)
+        bm.deallocate(seq)
+
+    for h in stale_hashes:
+        assert h not in bm.hash_to_block_id
+    _assert_hash_consistency(bm)
+
+
+def test_block_manager_hash_entries_bounded_by_num_blocks():
+    from nanovllm_voxcpm.engine.block_manager import BlockManager
+
+    bm = BlockManager(num_blocks=4, block_size=4)
+    for i in range(50):
+        seq = _make_seq(f"s{i}", [100 * (i + 1) + j for j in range(8)], 4)
+        bm.allocate(seq)
+        bm.deallocate(seq)
+
+    assert len(bm.hash_to_block_id) <= len(bm.blocks)
+    _assert_hash_consistency(bm)
+
+
 def test_block_manager_append_block_boundary():
     from nanovllm_voxcpm.engine.block_manager import BlockManager
 
