@@ -33,6 +33,18 @@ Allocation uses the hash chain:
 - If there is any cache miss at block k, all subsequent blocks must be treated
   as misses as well (because their prefixes differ).
 
+Hash-entry lifecycle
+--------------------
+``hash_to_block_id`` maps a rolling hash to the block that currently holds the
+matching content. An entry lives exactly as long as the content: it is created
+when a full block is registered as a cache candidate
+(:meth:`BlockManager._publish`) and dropped when the block is recycled for
+different content (:meth:`BlockManager._allocate_block`). Releasing a block
+(:meth:`BlockManager._deallocate_block`) intentionally keeps the entry: a freed
+block's KV bytes stay intact until the block is handed to a new owner, so a
+later request with the same prefix can "resurrect" it as a cache hit. As a
+consequence, ``len(hash_to_block_id)`` never exceeds ``num_blocks``.
+
 Reference counting
 ------------------
 Blocks are reference-counted so multiple sequences can share KV blocks when
@@ -109,12 +121,31 @@ class BlockManager:
         return h.intdigest()
 
     def _allocate_block(self, block_id: int) -> Block:
+        """Take a free block into use, ending its previous content identity.
+
+        This is the moment a recycled block's old prefix is logically
+        overwritten, so its stale ``hash_to_block_id`` entry (if any) is
+        dropped here. Entries of freed-but-not-yet-recycled blocks are
+        intentionally kept so those blocks remain prefix-cache candidates.
+        """
         block = self.blocks[block_id]
         assert block.ref_count == 0
+        if block.hash != -1 and self.hash_to_block_id.get(block.hash) == block_id:
+            self.hash_to_block_id.pop(block.hash)
         block.reset()
         self.free_block_ids.remove(block_id)
         self.used_block_ids.add(block_id)
         return self.blocks[block_id]
+
+    def _publish(self, block: Block, hash: int, token_ids: list[int | bytes]) -> None:
+        """Register a full block as a prefix-cache candidate.
+
+        Single writer for ``hash_to_block_id``: every content birth
+        (prefill fill-up or decode fill-up) goes through here, just as every
+        content death goes through :meth:`_allocate_block`.
+        """
+        block.update(hash, token_ids)
+        self.hash_to_block_id[hash] = block.block_id
 
     def _deallocate_block(self, block_id: int) -> None:
         assert self.blocks[block_id].ref_count == 0
@@ -145,8 +176,7 @@ class BlockManager:
                 else:
                     block = self._allocate_block(block_id)
             if h != -1:
-                block.update(h, token_ids)
-                self.hash_to_block_id[h] = block_id
+                self._publish(block, h, token_ids)
             seq.block_table.append(block_id)
 
     def deallocate(self, seq: Sequence):
@@ -174,7 +204,6 @@ class BlockManager:
                 token_ids = seq.block(seq.num_blocks - 1)
                 prefix = self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1
                 h = self.compute_hash(token_ids, prefix)
-                last_block.update(h, token_ids)
-                self.hash_to_block_id[h] = last_block.block_id
+                self._publish(last_block, h, token_ids)
         else:
             assert last_block.hash == -1
