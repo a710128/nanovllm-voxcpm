@@ -415,7 +415,9 @@ class TestTritonSmallMDotSupport:
 
         from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
 
-        monkeypatch.setattr(triton, "__version__", version)
+        # raising=False: CI environments without a real triton install get a
+        # shim stub module (see tests/_shims.py) that has no __version__.
+        monkeypatch.setattr(triton, "__version__", version, raising=False)
         return lora_shrink_op._triton_supports_small_m_dot()
 
     @pytest.mark.parametrize(
@@ -444,7 +446,10 @@ class TestTritonSmallMDotSupport:
 
         from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
 
-        monkeypatch.delattr(triton, "__version__")
+        if hasattr(triton, "__version__"):
+            monkeypatch.delattr(triton, "__version__")
+        # Whether the attribute is genuinely absent (CI triton stub) or just
+        # removed here, the probe must conservatively return False.
         assert lora_shrink_op._triton_supports_small_m_dot() is False
 
     def test_version_probe_is_cached(self, monkeypatch):
@@ -453,9 +458,9 @@ class TestTritonSmallMDotSupport:
 
         from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
 
-        monkeypatch.setattr(triton, "__version__", "3.6.0")
+        monkeypatch.setattr(triton, "__version__", "3.6.0", raising=False)
         first = lora_shrink_op._triton_supports_small_m_dot()
-        monkeypatch.setattr(triton, "__version__", "3.4.0")
+        monkeypatch.setattr(triton, "__version__", "3.4.0", raising=False)
         # Cached: the mutated version must not change the answer.
         assert lora_shrink_op._triton_supports_small_m_dot() is first is True
 
