@@ -909,3 +909,49 @@ def test_vendored_triton_shrink_small_m_split_k_cuda():
         expected[token_idx] = torch.matmul(inputs[token_idx].float(), lora_a[lora_idx].float().transpose(0, 1)) * 0.5
 
     assert torch.allclose(output.squeeze(0).float().cpu(), expected.cpu(), atol=2e-1, rtol=2e-1)
+
+
+@pytest.mark.parametrize("m", [1, 4])
+def test_vendored_triton_shrink_small_m_fallback_on_old_triton_cuda(monkeypatch, m):
+    """Issue #74: on Triton < 3.5 the small-M kernel's one-row `tl.dot` fails
+    to compile (M/N >= 16 assertion). Simulate such a Triton and verify that
+    small-M shrink falls back to the regular kernel and stays numerically
+    correct — including the single-token decode case (M=1)."""
+    from nanovllm_voxcpm.lora_ops.triton_ops import lora_shrink_op
+    from nanovllm_voxcpm.lora_ops.triton_ops.lora_shrink_op import lora_shrink
+
+    monkeypatch.setattr(lora_shrink_op, "_triton_supports_small_m_dot", lambda: False)
+
+    device = "cuda"
+    dtype = torch.float16
+    hidden_size = 160
+    rank = 8
+    inputs = torch.randn(m, hidden_size, device=device, dtype=dtype)
+    lora_a = torch.randn(1, rank, hidden_size, device=device, dtype=dtype)
+    output = torch.empty((1, m, rank), device=device, dtype=dtype)
+
+    token_lora_mapping = torch.zeros(m, dtype=torch.int32, device=device)
+    token_indices_sorted_by_lora_ids = torch.arange(m, dtype=torch.int32, device=device)
+    num_tokens_per_lora = torch.tensor([m, 0], dtype=torch.int32, device=device)
+    lora_token_start_loc = torch.tensor([0, m], dtype=torch.int32, device=device)
+    lora_ids = torch.tensor([0, -1], dtype=torch.int32, device=device)
+
+    lora_shrink(
+        inputs,
+        [lora_a],
+        output,
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        False,
+        1,
+        0.5,
+    )
+
+    expected = torch.empty((m, rank), device=device, dtype=torch.float32)
+    for token_idx, lora_idx in enumerate(token_lora_mapping.tolist()):
+        expected[token_idx] = torch.matmul(inputs[token_idx].float(), lora_a[lora_idx].float().transpose(0, 1)) * 0.5
+
+    assert torch.allclose(output.squeeze(0).float().cpu(), expected.cpu(), atol=5e-2, rtol=5e-2)
